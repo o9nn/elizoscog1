@@ -49,14 +49,13 @@ class AgentbrowserBridge:
     async def _setup_elizaos_connection(self):
         """Setup connection to ElizaOS ecosystem"""
         logger.debug("Setting up ElizaOS connection")
+        self.browser_sessions = {}
+        self.scrape_cache = {}
+        self.max_cache_size = self.config.get('max_cache_size', 100)
         try:
-            self.browser_sessions = {}
-            self.scrape_cache = {}
-            self.max_cache_size = self.config.get('max_cache_size', 100)
             logger.info("✅ ElizaOS browser client established")
         except Exception as e:
-            logger.warning(f"⚠️ ElizaOS browser setup failed: {e}")
-            self.browser_sessions = None
+            logger.warning(f"⚠️ ElizaOS browser setup warning: {e}")
         
     async def _setup_opencog_connection(self):
         """Setup connection to OpenCog ecosystem"""

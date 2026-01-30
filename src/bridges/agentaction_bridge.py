@@ -49,15 +49,14 @@ class AgentactionBridge:
     async def _setup_elizaos_connection(self):
         """Setup connection to ElizaOS ecosystem"""
         logger.debug("Setting up ElizaOS connection")
+        self.action_registry = {}
+        self.action_history = []
+        self.action_chains = {}
+        self.max_history_size = self.config.get('max_history_size', 1000)
         try:
-            self.action_registry = {}
-            self.action_history = []
-            self.action_chains = {}
-            self.max_history_size = self.config.get('max_history_size', 1000)
             logger.info("✅ ElizaOS action registry established")
         except Exception as e:
-            logger.warning(f"⚠️ ElizaOS action setup failed: {e}")
-            self.action_registry = None
+            logger.warning(f"⚠️ ElizaOS action setup warning: {e}")
         
     async def _setup_opencog_connection(self):
         """Setup connection to OpenCog ecosystem"""

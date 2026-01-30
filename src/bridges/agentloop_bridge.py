@@ -49,15 +49,14 @@ class AgentloopBridge:
     async def _setup_elizaos_connection(self):
         """Setup connection to ElizaOS ecosystem"""
         logger.debug("Setting up ElizaOS connection")
+        self.active_loops = {}
+        self.loop_schedules = {}
+        self.loop_history = []
+        self.max_history_size = self.config.get('max_history_size', 1000)
         try:
-            self.active_loops = {}
-            self.loop_schedules = {}
-            self.loop_history = []
-            self.max_history_size = self.config.get('max_history_size', 1000)
             logger.info("✅ ElizaOS loop manager established")
         except Exception as e:
-            logger.warning(f"⚠️ ElizaOS loop setup failed: {e}")
-            self.active_loops = None
+            logger.warning(f"⚠️ ElizaOS loop setup warning: {e}")
         
     async def _setup_opencog_connection(self):
         """Setup connection to OpenCog ecosystem"""
