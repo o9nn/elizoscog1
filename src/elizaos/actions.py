@@ -710,3 +710,336 @@ def action(name: str, description: str, parameters: List[ActionParameter] = None
 async def calculate_sum(a: float, b: float) -> float:
     """Example action function"""
     return a + b
+
+
+# ==================== OpenCog PLN Reasoning Actions ====================
+
+class PLNReasoningAction(BaseAction):
+    """Action that uses OpenCog PLN (Probabilistic Logic Networks) for reasoning"""
+    
+    def __init__(self):
+        parameters = [
+            ActionParameter('premises', list, 'List of premises for reasoning'),
+            ActionParameter('target_conclusion', str, 'Target conclusion to reason about', required=False),
+            ActionParameter('confidence_threshold', float, 'Minimum confidence threshold', required=False, default=0.5),
+        ]
+        super().__init__(
+            name="pln_reasoning",
+            description="Perform PLN reasoning on given premises",
+            parameters=parameters
+        )
+        self.pln_available = False
+        try:
+            # Try to import OpenCog PLN
+            from opencog.pln import *
+            self.pln_available = True
+        except ImportError:
+            logger.warning("OpenCog PLN not available, using fallback reasoning")
+    
+    async def execute(self, premises: List[str], target_conclusion: str = None, 
+                     confidence_threshold: float = 0.5, **kwargs) -> ActionResult:
+        """Execute PLN reasoning"""
+        start_time = asyncio.get_event_loop().time()
+        
+        try:
+            if self.pln_available:
+                result = await self._execute_pln_reasoning(premises, target_conclusion, confidence_threshold)
+            else:
+                result = await self._fallback_reasoning(premises, target_conclusion, confidence_threshold)
+            
+            execution_time = asyncio.get_event_loop().time() - start_time
+            self.execution_count += 1
+            self.total_execution_time += execution_time
+            
+            return ActionResult(
+                success=True,
+                data=result,
+                execution_time=execution_time,
+                metadata={'reasoning_type': 'PLN', 'premises_count': len(premises)}
+            )
+            
+        except Exception as e:
+            execution_time = asyncio.get_event_loop().time() - start_time
+            logger.error(f"PLN reasoning failed: {e}")
+            return ActionResult(
+                success=False,
+                error=str(e),
+                execution_time=execution_time
+            )
+    
+    async def _execute_pln_reasoning(self, premises: List[str], target: str, threshold: float) -> Dict:
+        """Execute actual PLN reasoning using OpenCog"""
+        # This would use OpenCog's PLN inference engine
+        # Simplified implementation for now
+        conclusions = []
+        
+        for premise in premises:
+            # In real implementation, this would:
+            # 1. Convert premises to Atoms
+            # 2. Apply PLN inference rules
+            # 3. Calculate confidence values
+            # 4. Return high-confidence conclusions
+            
+            conclusion = {
+                'statement': f"Inferred from: {premise}",
+                'confidence': 0.8,
+                'strength': 0.9
+            }
+            conclusions.append(conclusion)
+        
+        return {
+            'conclusions': conclusions,
+            'reasoning_method': 'PLN',
+            'total_inferences': len(conclusions)
+        }
+    
+    async def _fallback_reasoning(self, premises: List[str], target: str, threshold: float) -> Dict:
+        """Fallback reasoning when PLN is not available"""
+        # Simple rule-based reasoning
+        conclusions = []
+        
+        for i, premise in enumerate(premises):
+            conclusion = {
+                'statement': f"Simple inference {i+1}: Based on {premise[:50]}...",
+                'confidence': 0.6,
+                'strength': 0.7,
+                'method': 'fallback'
+            }
+            conclusions.append(conclusion)
+        
+        return {
+            'conclusions': conclusions,
+            'reasoning_method': 'fallback',
+            'total_inferences': len(conclusions),
+            'note': 'Using fallback reasoning - OpenCog PLN not available'
+        }
+
+
+class CognitiveActionPlanner(BaseAction):
+    """
+    Cognitive action planning using OpenCog reasoning
+    Plans sequences of actions to achieve goals
+    """
+    
+    def __init__(self, action_registry: 'ActionRegistry'):
+        parameters = [
+            ActionParameter('goal', str, 'Goal to achieve'),
+            ActionParameter('context', dict, 'Current context and state', required=False),
+            ActionParameter('max_steps', int, 'Maximum planning steps', required=False, default=10),
+        ]
+        super().__init__(
+            name="cognitive_action_planner",
+            description="Plan action sequences using cognitive reasoning",
+            parameters=parameters
+        )
+        self.action_registry = action_registry
+    
+    async def execute(self, goal: str, context: Dict = None, max_steps: int = 10, **kwargs) -> ActionResult:
+        """Execute cognitive action planning"""
+        start_time = asyncio.get_event_loop().time()
+        
+        try:
+            # Generate action plan
+            plan = await self._generate_action_plan(goal, context or {}, max_steps)
+            
+            execution_time = asyncio.get_event_loop().time() - start_time
+            self.execution_count += 1
+            self.total_execution_time += execution_time
+            
+            return ActionResult(
+                success=True,
+                data=plan,
+                execution_time=execution_time,
+                metadata={'goal': goal, 'plan_steps': len(plan.get('steps', []))}
+            )
+            
+        except Exception as e:
+            execution_time = asyncio.get_event_loop().time() - start_time
+            logger.error(f"Action planning failed: {e}")
+            return ActionResult(
+                success=False,
+                error=str(e),
+                execution_time=execution_time
+            )
+    
+    async def _generate_action_plan(self, goal: str, context: Dict, max_steps: int) -> Dict:
+        """Generate a cognitive action plan"""
+        # This would use OpenCog's planning algorithms
+        # For now, implementing a simplified version
+        
+        steps = []
+        available_actions = self.action_registry.get_all_actions()
+        
+        # Analyze goal
+        goal_analysis = self._analyze_goal(goal, context)
+        
+        # Select relevant actions based on goal
+        relevant_actions = self._select_relevant_actions(goal_analysis, available_actions)
+        
+        # Build action sequence
+        for i, action in enumerate(relevant_actions[:max_steps]):
+            step = {
+                'step_number': i + 1,
+                'action': action.name,
+                'description': action.description,
+                'parameters': {},  # Would be filled based on context
+                'expected_outcome': f"Progress toward: {goal}",
+                'confidence': 0.8 - (i * 0.05)  # Confidence decreases with plan length
+            }
+            steps.append(step)
+        
+        plan = {
+            'goal': goal,
+            'steps': steps,
+            'total_steps': len(steps),
+            'estimated_success_probability': 0.7,
+            'alternative_plans': []  # Could generate multiple plans
+        }
+        
+        return plan
+    
+    def _analyze_goal(self, goal: str, context: Dict) -> Dict:
+        """Analyze goal to determine requirements"""
+        # Simple keyword-based analysis
+        # Real implementation would use NLP and cognitive reasoning
+        
+        analysis = {
+            'goal_type': 'unknown',
+            'required_capabilities': [],
+            'constraints': [],
+            'context_requirements': []
+        }
+        
+        goal_lower = goal.lower()
+        
+        if any(word in goal_lower for word in ['calculate', 'compute', 'analyze']):
+            analysis['goal_type'] = 'analytical'
+            analysis['required_capabilities'].append('computation')
+        
+        if any(word in goal_lower for word in ['find', 'search', 'locate']):
+            analysis['goal_type'] = 'retrieval'
+            analysis['required_capabilities'].append('search')
+        
+        if any(word in goal_lower for word in ['financial', 'money', 'transaction']):
+            analysis['required_capabilities'].append('financial_access')
+        
+        return analysis
+    
+    def _select_relevant_actions(self, goal_analysis: Dict, available_actions: List[BaseAction]) -> List[BaseAction]:
+        """Select actions relevant to the goal"""
+        relevant = []
+        
+        goal_type = goal_analysis.get('goal_type', '')
+        
+        for action in available_actions:
+            # Match actions to goal type
+            if goal_type in action.description.lower():
+                relevant.append(action)
+            elif any(cap in action.description.lower() for cap in goal_analysis.get('required_capabilities', [])):
+                relevant.append(action)
+        
+        # If no specific matches, return a subset of all actions
+        if not relevant:
+            relevant = available_actions[:3]
+        
+        return relevant
+
+
+class PLNActionSelector(BaseAction):
+    """
+    Use PLN reasoning to select the best action for a given situation
+    """
+    
+    def __init__(self, action_registry: 'ActionRegistry'):
+        parameters = [
+            ActionParameter('situation', str, 'Current situation description'),
+            ActionParameter('available_actions', list, 'List of available action names', required=False),
+            ActionParameter('preferences', dict, 'User preferences for action selection', required=False),
+        ]
+        super().__init__(
+            name="pln_action_selector",
+            description="Select best action using PLN reasoning",
+            parameters=parameters
+        )
+        self.action_registry = action_registry
+    
+    async def execute(self, situation: str, available_actions: List[str] = None,
+                     preferences: Dict = None, **kwargs) -> ActionResult:
+        """Select action using PLN reasoning"""
+        start_time = asyncio.get_event_loop().time()
+        
+        try:
+            # Get available actions
+            if available_actions:
+                actions = [self.action_registry.get_action(name) for name in available_actions]
+                actions = [a for a in actions if a is not None]
+            else:
+                actions = self.action_registry.get_all_actions()
+            
+            # Evaluate each action
+            evaluations = []
+            for action in actions:
+                score = await self._evaluate_action(action, situation, preferences or {})
+                evaluations.append({
+                    'action': action.name,
+                    'score': score,
+                    'description': action.description
+                })
+            
+            # Sort by score
+            evaluations.sort(key=lambda x: x['score'], reverse=True)
+            
+            # Select best action
+            best_action = evaluations[0] if evaluations else None
+            
+            execution_time = asyncio.get_event_loop().time() - start_time
+            self.execution_count += 1
+            self.total_execution_time += execution_time
+            
+            return ActionResult(
+                success=True,
+                data={
+                    'selected_action': best_action,
+                    'all_evaluations': evaluations,
+                    'reasoning': f"Selected based on situation: {situation[:100]}"
+                },
+                execution_time=execution_time
+            )
+            
+        except Exception as e:
+            execution_time = asyncio.get_event_loop().time() - start_time
+            logger.error(f"Action selection failed: {e}")
+            return ActionResult(
+                success=False,
+                error=str(e),
+                execution_time=execution_time
+            )
+    
+    async def _evaluate_action(self, action: BaseAction, situation: str, preferences: Dict) -> float:
+        """Evaluate how well an action fits the situation"""
+        # This would use PLN to reason about action appropriateness
+        # Simplified scoring for now
+        
+        score = 0.5  # Base score
+        
+        # Check if action description matches situation keywords
+        situation_words = set(situation.lower().split())
+        action_words = set(action.description.lower().split())
+        
+        overlap = situation_words & action_words
+        score += len(overlap) * 0.1
+        
+        # Check preferences
+        if preferences.get('prefer_fast', False):
+            avg_time = action.total_execution_time / max(1, action.execution_count)
+            if avg_time < 1.0:
+                score += 0.2
+        
+        if preferences.get('prefer_reliable', False):
+            # Higher execution count suggests reliability
+            if action.execution_count > 10:
+                score += 0.2
+        
+        # Cap score at 1.0
+        return min(1.0, score)
+    return a + b
