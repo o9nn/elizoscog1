@@ -32,6 +32,7 @@ The core of the system. As of 2025, it is active, stable and supported.
 * [atomspace-pgres](https://github.com/opencog/atomspace-pgres) - Postgres StorageNode for the AtomSpace
 * [atomspace-storage](https://github.com/opencog/atomspace-storage) - AtomSpace StorageNode base system
 * [atomspace-viz](https://github.com/opencog/atomspace-viz) - Visualizer for AtomSpace contents
+* [atomspace-gpu](https://github.com/opencog/atomspace-gpu) - OpenCL implementation of the AtomSpace
 
 ### OpenCog Fossils
 Older, abandoned and obsolete components and experiments. These were attempts to build subsystems 
