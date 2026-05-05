@@ -302,22 +302,60 @@ class NaturalLanguageQueryEngine:
             }
     
     async def _execute_balance_query(self, intent: QueryIntent) -> Dict[str, Any]:
-        """Execute balance query"""
-        # Mock implementation - would query actual data
+        """Execute balance query against GnuCash data."""
+        if self.gnucash_access and self.gnucash_access.initialized:
+            accounts = await self.gnucash_access.get_accounts()
+            result_accounts = []
+            total = 0.0
+            for acct in accounts:
+                if acct['account_type'] in ('BANK', 'ASSET', 'CASH', 'CREDIT'):
+                    balance = float(
+                        await self.gnucash_access.get_account_balance(acct['guid'])
+                    )
+                    result_accounts.append({'name': acct['name'], 'balance': balance})
+                    total += balance
+            return {
+                'accounts': result_accounts,
+                'total_balance': round(total, 2),
+                'currency': 'USD'
+            }
+        # Mock fallback
         return {
             'accounts': [
                 {'name': 'Checking', 'balance': 5234.56},
                 {'name': 'Savings', 'balance': 12500.00}
             ],
             'total_balance': 17734.56,
-            'currency': 'USD'
+            'currency': 'USD',
+            'note': 'mock data — no GnuCash connection'
         }
-    
+
     async def _execute_spending_query(self, intent: QueryIntent) -> Dict[str, Any]:
-        """Execute spending query"""
-        categories = intent.entities.get('categories', ['all'])
-        
-        # Mock implementation
+        """Execute spending query against GnuCash data."""
+        if self.gnucash_access and self.gnucash_access.initialized:
+            from datetime import date as _date
+            if intent.timeframe:
+                start = _date.fromisoformat(intent.timeframe[0].date().isoformat())
+                end = _date.fromisoformat(intent.timeframe[1].date().isoformat())
+            else:
+                from datetime import timedelta as _td
+                end = _date.today()
+                start = _date(end.year, end.month, 1)
+
+            requested_categories = set(intent.entities.get('categories', []))
+            spending = await self.gnucash_access.get_spending_by_category(start, end)
+            if requested_categories:
+                spending = {
+                    k: v for k, v in spending.items()
+                    if k.lower() in requested_categories
+                }
+            return {
+                'total_spending': round(sum(float(v) for v in spending.values()), 2),
+                'category_breakdown': {k: round(float(v), 2) for k, v in spending.items()},
+                'timeframe': f"{start} to {end}",
+                'currency': 'USD'
+            }
+        # Mock fallback
         return {
             'total_spending': 1450.32,
             'category_breakdown': {
@@ -327,11 +365,28 @@ class NaturalLanguageQueryEngine:
                 'utilities': 500.32
             },
             'timeframe': 'this month',
-            'currency': 'USD'
+            'currency': 'USD',
+            'note': 'mock data — no GnuCash connection'
         }
-    
+
     async def _execute_income_query(self, intent: QueryIntent) -> Dict[str, Any]:
-        """Execute income query"""
+        """Execute income query against GnuCash data."""
+        if self.gnucash_access and self.gnucash_access.initialized:
+            from datetime import date as _date
+            if intent.timeframe:
+                start = _date.fromisoformat(intent.timeframe[0].date().isoformat())
+                end = _date.fromisoformat(intent.timeframe[1].date().isoformat())
+            else:
+                from datetime import timedelta as _td
+                end = _date.today()
+                start = _date(end.year, end.month, 1)
+            income = await self.gnucash_access.get_income_by_category(start, end)
+            return {
+                'total_income': round(sum(float(v) for v in income.values()), 2),
+                'sources': [{'name': k, 'amount': round(float(v), 2)} for k, v in income.items()],
+                'timeframe': f"{start} to {end}",
+                'currency': 'USD'
+            }
         return {
             'total_income': 5000.00,
             'sources': [
@@ -339,74 +394,73 @@ class NaturalLanguageQueryEngine:
                 {'name': 'Freelance', 'amount': 500.00}
             ],
             'timeframe': 'this month',
-            'currency': 'USD'
+            'currency': 'USD',
+            'note': 'mock data — no GnuCash connection'
         }
-    
-    async def _execute_comparison_query(self, intent: QueryIntent) -> Dict[str, Any]:
-        """Execute comparison query"""
-        return {
-            'comparison': 'this month vs last month',
-            'current': 1450.32,
-            'previous': 1623.45,
-            'difference': -173.13,
-            'percent_change': -10.66,
-            'trend': 'decreasing'
-        }
-    
-    async def _execute_trend_query(self, intent: QueryIntent) -> Dict[str, Any]:
-        """Execute trend query"""
-        return {
-            'trend_type': 'spending over time',
-            'direction': 'increasing',
-            'data_points': [
-                {'period': 'Jan', 'value': 1200},
-                {'period': 'Feb', 'value': 1350},
-                {'period': 'Mar', 'value': 1450}
-            ],
-            'trend_strength': 0.85
-        }
-    
-    async def _execute_category_query(self, intent: QueryIntent) -> Dict[str, Any]:
-        """Execute category query"""
-        return {
-            'categories': {
-                'groceries': {'spending': 450, 'transactions': 12},
-                'dining': {'spending': 300, 'transactions': 8},
-                'transportation': {'spending': 200, 'transactions': 15}
-            },
-            'total_categories': 3,
-            'largest_category': 'groceries'
-        }
-    
+
     async def _execute_search_query(self, intent: QueryIntent) -> Dict[str, Any]:
-        """Execute search query"""
+        """Execute search query against GnuCash data."""
+        search_term = intent.entities.get('categories', [''])[0] if intent.entities.get('categories') else ''
+        if not search_term:
+            # Try extracting from raw query via memory
+            search_term = intent.parameters.get('search_term', '')
+
+        if self.gnucash_access and self.gnucash_access.initialized and search_term:
+            rows = await self.gnucash_access.search_transactions(search_term)
+            transactions = [
+                {
+                    'date': r['post_date'],
+                    'description': r['description'],
+                    'amount': float(r['amount'])
+                }
+                for r in rows
+            ]
+            return {'transactions': transactions, 'count': len(transactions)}
+
         return {
             'transactions': [
                 {'date': '2024-01-15', 'description': 'Grocery Store', 'amount': 45.23},
                 {'date': '2024-01-12', 'description': 'Gas Station', 'amount': 40.00}
             ],
-            'count': 2
+            'count': 2,
+            'note': 'mock data — no GnuCash connection'
         }
-    
+
     async def _execute_summary_query(self, intent: QueryIntent) -> Dict[str, Any]:
-        """Execute summary query"""
+        """Execute summary query against GnuCash data."""
+        if self.gnucash_access and self.gnucash_access.initialized:
+            from datetime import date as _date
+            if intent.timeframe:
+                start = _date.fromisoformat(intent.timeframe[0].date().isoformat())
+                end = _date.fromisoformat(intent.timeframe[1].date().isoformat())
+            else:
+                from datetime import timedelta as _td
+                end = _date.today()
+                start = _date(end.year, end.month, 1)
+            spending = await self.gnucash_access.get_spending_by_category(start, end)
+            income = await self.gnucash_access.get_income_by_category(start, end)
+            total_expenses = sum(float(v) for v in spending.values())
+            total_income = sum(float(v) for v in income.values())
+            txns = await self.gnucash_access.get_transactions(
+                start_date=start, end_date=end, limit=500
+            )
+            top_cats = sorted(spending.items(), key=lambda x: x[1], reverse=True)[:3]
+            return {
+                'period': f"{start} to {end}",
+                'total_income': round(total_income, 2),
+                'total_expenses': round(total_expenses, 2),
+                'net': round(total_income - total_expenses, 2),
+                'transactions': len(txns),
+                'top_categories': [c for c, _ in top_cats]
+            }
         return {
             'period': 'this month',
             'total_income': 5000.00,
             'total_expenses': 1450.32,
             'net': 3549.68,
             'transactions': 45,
-            'top_categories': ['groceries', 'dining', 'transportation']
-        }
-    
-    async def _execute_prediction_query(self, intent: QueryIntent) -> Dict[str, Any]:
-        """Execute prediction query"""
-        return {
-            'prediction_type': 'future spending',
-            'predicted_amount': 1500.00,
-            'confidence_interval': (1350.00, 1650.00),
-            'confidence': 0.75,
-            'timeframe': 'next month'
+            'top_categories': ['groceries', 'dining', 'transportation'],
+            'note': 'mock data — no GnuCash connection'
         }
     
     async def get_query_suggestions(self, partial_query: str) -> List[str]:
