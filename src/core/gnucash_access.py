@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """
 GnuCash Database Access Patterns for ElizaOS-OpenCog Integration
-Phase 1: Foundation infrastructure for financial data integration
+
+Supports two storage backends:
+  * SQLite  — GnuCash files saved with the SQLite backend (.gnucash opened
+              with GnuCash ≥ 2.6 "Save as SQLite").
+  * XML     — Classic GnuCash XML files (.gnucash or .xml, optionally
+              gzip-compressed).  Parsed with the stdlib xml.etree module.
+
+The public async API (get_accounts, get_transactions, …) is identical for both
+backends so callers do not need to care which format is on disk.
 """
 
+import gzip
 import sqlite3
 import asyncio
 import logging
+import xml.etree.ElementTree as ET
 from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, date, timedelta
 from decimal import Decimal
@@ -14,44 +24,193 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# GnuCash XML namespaces
+_GNC_NS = {
+    'gnc': 'http://www.gnucash.org/XML/gnc',
+    'act': 'http://www.gnucash.org/XML/act',
+    'trn': 'http://www.gnucash.org/XML/trn',
+    'split': 'http://www.gnucash.org/XML/split',
+    'ts': 'http://www.gnucash.org/XML/ts',
+    'cmdty': 'http://www.gnucash.org/XML/cmdty',
+}
+
 class GnuCashDataAccess:
     """
-    Core GnuCash database access layer
-    Provides foundation patterns for financial data integration
+    Core GnuCash database access layer.
+
+    Auto-detects the file format on :meth:`initialize`:
+    * If the SQLite ``accounts`` table is present → SQLite backend.
+    * Otherwise tries to parse as GnuCash XML (plain or gzip).
+    * If the file does not exist at all → creates a minimal SQLite mock DB
+      so unit tests work without a real GnuCash file.
     """
-    
+
     def __init__(self, database_path: str):
         self.database_path = database_path
         self.connection = None
         self.initialized = False
+        self._backend: str = "sqlite"  # "sqlite" | "xml"
+        # In-memory tables populated when using the XML backend
+        self._xml_accounts: List[Dict[str, Any]] = []
+        self._xml_transactions: List[Dict[str, Any]] = []
         
     async def initialize(self) -> bool:
-        """Initialize GnuCash database connection"""
+        """Initialize GnuCash database connection.
+
+        Detection order:
+        1. File does not exist → create mock SQLite DB.
+        2. File is a valid SQLite DB with GnuCash tables → SQLite backend.
+        3. File is GnuCash XML (plain or gzip) → XML backend.
+        4. Neither → log error and return False.
+        """
         try:
-            logger.info(f"Initializing GnuCash database connection: {self.database_path}")
-            
-            # Check if database file exists
-            if not Path(self.database_path).exists():
-                logger.warning(f"GnuCash database file not found: {self.database_path}")
-                # Create mock database for integration testing
+            logger.info(f"Initializing GnuCash data access: {self.database_path}")
+            path = Path(self.database_path)
+
+            if not path.exists():
+                logger.warning(f"GnuCash file not found: {self.database_path} — creating mock SQLite DB")
                 await self._create_mock_database()
-            
-            # Connect to database
-            self.connection = sqlite3.connect(self.database_path)
-            self.connection.row_factory = sqlite3.Row  # Enable column access by name
-            
-            # Verify database structure
-            if await self._verify_database_structure():
+
+            # Try SQLite first
+            if await self._try_sqlite_backend():
+                self._backend = "sqlite"
                 self.initialized = True
-                logger.info("✅ GnuCash database connection initialized successfully")
+                logger.info("✅ GnuCash SQLite backend initialized")
                 return True
-            else:
-                logger.error("❌ GnuCash database structure verification failed")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Failed to initialize GnuCash database: {e}")
+
+            # Fall back to XML
+            if await self._try_xml_backend():
+                self._backend = "xml"
+                self.initialized = True
+                logger.info("✅ GnuCash XML backend initialized")
+                return True
+
+            logger.error("❌ Could not determine GnuCash file format")
             return False
+
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize GnuCash data access: {e}")
+            return False
+
+    async def _try_sqlite_backend(self) -> bool:
+        """Attempt to open as SQLite and verify the GnuCash schema."""
+        try:
+            conn = sqlite3.connect(self.database_path)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+            tables = {row[0] for row in cursor.fetchall()}
+            required = {'accounts', 'transactions', 'splits', 'commodities'}
+            if required.issubset(tables):
+                self.connection = conn
+                return True
+            conn.close()
+            return False
+        except Exception:
+            return False
+
+    async def _try_xml_backend(self) -> bool:
+        """Attempt to parse as GnuCash XML (plain or gzip)."""
+        try:
+            path = Path(self.database_path)
+            raw = path.read_bytes()
+            # Detect gzip magic bytes
+            if raw[:2] == b'\x1f\x8b':
+                raw = gzip.decompress(raw)
+            root = ET.fromstring(raw.decode('utf-8', errors='replace'))
+            self._parse_xml_accounts(root)
+            self._parse_xml_transactions(root)
+            return True
+        except Exception as exc:
+            logger.debug(f"XML parse failed: {exc}")
+            return False
+
+    # ------------------------------------------------------------------
+    # XML parsing helpers
+    # ------------------------------------------------------------------
+
+    def _xml_text(self, element: ET.Element, tag: str, ns_prefix: str = '') -> str:
+        """Return text of first matching child element."""
+        search = f"{{{_GNC_NS[ns_prefix]}}}{tag}" if ns_prefix else tag
+        child = element.find(search)
+        return child.text.strip() if child is not None and child.text else ''
+
+    def _parse_xml_accounts(self, root: ET.Element) -> None:
+        """Parse accounts from GnuCash XML into self._xml_accounts."""
+        self._xml_accounts = []
+        book = root.find(f"{{{_GNC_NS['gnc']}}}book")
+        if book is None:
+            return
+        for acct in book.findall(f"{{{_GNC_NS['gnc']}}}account"):
+            guid = self._xml_text(acct, 'id', 'act')
+            name = self._xml_text(acct, 'name', 'act')
+            acct_type = self._xml_text(acct, 'type', 'act')
+            parent_el = acct.find(f"{{{_GNC_NS['act']}}}parent")
+            parent_guid = parent_el.text.strip() if parent_el is not None and parent_el.text else None
+            desc_el = acct.find(f"{{{_GNC_NS['act']}}}description")
+            description = desc_el.text.strip() if desc_el is not None and desc_el.text else ''
+            cmdty = acct.find(f"{{{_GNC_NS['act']}}}commodity")
+            commodity_id = ''
+            if cmdty is not None:
+                id_el = cmdty.find(f"{{{_GNC_NS['cmdty']}}}id")
+                if id_el is not None and id_el.text:
+                    commodity_id = id_el.text.strip()
+            self._xml_accounts.append({
+                'guid': guid,
+                'name': name,
+                'account_type': acct_type,
+                'commodity_guid': commodity_id,
+                'parent_guid': parent_guid,
+                'description': description,
+            })
+
+    def _parse_xml_transactions(self, root: ET.Element) -> None:
+        """Parse transactions + splits from GnuCash XML."""
+        self._xml_transactions = []
+        book = root.find(f"{{{_GNC_NS['gnc']}}}book")
+        if book is None:
+            return
+        # Build guid→name map for accounts
+        acct_map = {a['guid']: a for a in self._xml_accounts}
+
+        for txn in book.findall(f"{{{_GNC_NS['gnc']}}}transaction"):
+            tx_guid = self._xml_text(txn, 'id', 'trn')
+            desc = self._xml_text(txn, 'description', 'trn')
+            date_posted_el = txn.find(
+                f"{{{_GNC_NS['trn']}}}date-posted/{{{_GNC_NS['ts']}}}date"
+            )
+            post_date = ''
+            if date_posted_el is not None and date_posted_el.text:
+                raw_date = date_posted_el.text.strip()
+                # GnuCash format: "2024-01-15 10:59:00 +0000"
+                post_date = raw_date[:10]
+
+            splits_el = txn.find(f"{{{_GNC_NS['trn']}}}splits")
+            if splits_el is None:
+                continue
+            for split in splits_el.findall(f"{{{_GNC_NS['trn']}}}split"):
+                split_guid = self._xml_text(split, 'id', 'split')
+                acct_guid = self._xml_text(split, 'account', 'split')
+                memo = self._xml_text(split, 'memo', 'split')
+                value_str = self._xml_text(split, 'value', 'split')  # e.g. "-8550/100"
+                try:
+                    num, denom = value_str.split('/')
+                    amount = Decimal(num) / Decimal(denom)
+                except Exception:
+                    amount = Decimal('0')
+
+                acct = acct_map.get(acct_guid, {})
+                self._xml_transactions.append({
+                    'transaction_guid': tx_guid,
+                    'description': desc,
+                    'post_date': post_date,
+                    'account_guid': acct_guid,
+                    'account_name': acct.get('name', ''),
+                    'account_type': acct.get('account_type', ''),
+                    'memo': memo,
+                    'amount': amount,
+                    'enter_date': post_date,
+                })
     
     async def _create_mock_database(self):
         """Create a mock GnuCash database for testing"""
@@ -186,36 +345,19 @@ class GnuCashDataAccess:
             VALUES ('split2-guid', 'tx1-guid', 'groceries-guid', 'Grocery purchase', 8550, 100, 8550, 100)
         ''')
     
-    async def _verify_database_structure(self) -> bool:
-        """Verify GnuCash database has required tables"""
-        try:
-            cursor = self.connection.cursor()
-            
-            # Check for required tables
-            required_tables = ['accounts', 'transactions', 'splits', 'commodities']
-            
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            existing_tables = [row[0] for row in cursor.fetchall()]
-            
-            for table in required_tables:
-                if table not in existing_tables:
-                    logger.error(f"Required table '{table}' not found in database")
-                    return False
-            
-            logger.info("GnuCash database structure verified")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error verifying database structure: {e}")
-            return False
-    
     async def get_accounts(self, account_type: Optional[str] = None) -> List[Dict[str, Any]]:
-        """Get accounts, optionally filtered by type"""
+        """Get accounts, optionally filtered by type."""
         if not self.initialized:
             raise RuntimeError("Database not initialized")
-        
+
+        if self._backend == "xml":
+            accounts = self._xml_accounts
+            if account_type:
+                accounts = [a for a in accounts if a['account_type'] == account_type]
+            return sorted(accounts, key=lambda a: a['name'])
+
+        # SQLite backend
         cursor = self.connection.cursor()
-        
         if account_type:
             cursor.execute(
                 "SELECT * FROM accounts WHERE account_type = ? ORDER BY name",
@@ -223,7 +365,7 @@ class GnuCashDataAccess:
             )
         else:
             cursor.execute("SELECT * FROM accounts ORDER BY name")
-        
+
         accounts = []
         for row in cursor.fetchall():
             accounts.append({
@@ -234,7 +376,6 @@ class GnuCashDataAccess:
                 'parent_guid': row['parent_guid'],
                 'description': row['description']
             })
-        
         return accounts
     
     async def get_account_balance(self, account_guid: str) -> Decimal:
@@ -255,18 +396,28 @@ class GnuCashDataAccess:
         
         return Decimal(str(balance))
     
-    async def get_transactions(self, 
+    async def get_transactions(self,
                              account_guid: Optional[str] = None,
                              start_date: Optional[date] = None,
                              end_date: Optional[date] = None,
                              limit: int = 100) -> List[Dict[str, Any]]:
-        """Get transactions with optional filtering"""
+        """Get transactions with optional filtering."""
         if not self.initialized:
             raise RuntimeError("Database not initialized")
-        
+
+        if self._backend == "xml":
+            rows = self._xml_transactions
+            if account_guid:
+                rows = [r for r in rows if r['account_guid'] == account_guid]
+            if start_date:
+                rows = [r for r in rows if r['post_date'] >= start_date.isoformat()]
+            if end_date:
+                rows = [r for r in rows if r['post_date'] <= end_date.isoformat()]
+            rows = sorted(rows, key=lambda r: r['post_date'], reverse=True)[:limit]
+            return rows
+
+        # SQLite backend
         cursor = self.connection.cursor()
-        
-        # Build query with optional filters
         query = '''
             SELECT t.*, s.account_guid, s.memo, s.value_num, s.value_denom,
                    a.name as account_name, a.account_type
@@ -275,26 +426,20 @@ class GnuCashDataAccess:
             JOIN accounts a ON s.account_guid = a.guid
             WHERE 1=1
         '''
-        
         params = []
-        
         if account_guid:
             query += " AND s.account_guid = ?"
             params.append(account_guid)
-        
         if start_date:
             query += " AND t.post_date >= ?"
             params.append(start_date.isoformat())
-        
         if end_date:
             query += " AND t.post_date <= ?"
             params.append(end_date.isoformat())
-        
         query += " ORDER BY t.post_date DESC LIMIT ?"
         params.append(limit)
-        
+
         cursor.execute(query, params)
-        
         transactions = []
         for row in cursor.fetchall():
             transactions.append({
@@ -308,20 +453,30 @@ class GnuCashDataAccess:
                 'amount': Decimal(row['value_num']) / Decimal(row['value_denom']),
                 'enter_date': row['enter_date']
             })
-        
         return transactions
     
-    async def get_spending_by_category(self, 
+    async def get_spending_by_category(self,
                                      start_date: date,
                                      end_date: date) -> Dict[str, Decimal]:
-        """Get spending totals by expense category"""
+        """Get spending totals by expense category."""
         if not self.initialized:
             raise RuntimeError("Database not initialized")
-        
+
+        if self._backend == "xml":
+            spending: Dict[str, Decimal] = {}
+            for row in self._xml_transactions:
+                if row['account_type'] != 'EXPENSE':
+                    continue
+                if row['post_date'] < start_date.isoformat() or row['post_date'] > end_date.isoformat():
+                    continue
+                if row['amount'] > 0:
+                    name = row['account_name']
+                    spending[name] = spending.get(name, Decimal('0')) + row['amount']
+            return dict(sorted(spending.items(), key=lambda x: x[1], reverse=True))
+
         cursor = self.connection.cursor()
-        
         cursor.execute('''
-            SELECT a.name as category, 
+            SELECT a.name as category,
                    SUM(CAST(s.value_num AS REAL) / s.value_denom) as total
             FROM transactions t
             JOIN splits s ON t.guid = s.tx_guid
@@ -333,13 +488,12 @@ class GnuCashDataAccess:
             GROUP BY a.name
             ORDER BY total DESC
         ''', (start_date.isoformat(), end_date.isoformat()))
-        
+
         spending = {}
         for row in cursor.fetchall():
             category = row['category']
             total = Decimal(str(row['total'])) if row['total'] else Decimal('0')
             spending[category] = total
-        
         return spending
     
     async def get_income_by_category(self,
@@ -374,14 +528,20 @@ class GnuCashDataAccess:
         return income
     
     async def search_transactions(self, search_term: str, limit: int = 50) -> List[Dict[str, Any]]:
-        """Search transactions by description or memo"""
+        """Search transactions by description or memo."""
         if not self.initialized:
             raise RuntimeError("Database not initialized")
-        
+
+        if self._backend == "xml":
+            term = search_term.lower()
+            results = [
+                r for r in self._xml_transactions
+                if term in r['description'].lower() or term in r['memo'].lower()
+            ]
+            return results[:limit]
+
         cursor = self.connection.cursor()
-        
         search_pattern = f"%{search_term}%"
-        
         cursor.execute('''
             SELECT t.*, s.account_guid, s.memo, s.value_num, s.value_denom,
                    a.name as account_name, a.account_type
@@ -392,7 +552,7 @@ class GnuCashDataAccess:
             ORDER BY t.post_date DESC
             LIMIT ?
         ''', (search_pattern, search_pattern, limit))
-        
+
         results = []
         for row in cursor.fetchall():
             results.append({
@@ -403,7 +563,6 @@ class GnuCashDataAccess:
                 'memo': row['memo'],
                 'amount': Decimal(row['value_num']) / Decimal(row['value_denom'])
             })
-        
         return results
     
     async def close(self):

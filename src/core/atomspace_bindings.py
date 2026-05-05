@@ -1,23 +1,46 @@
 #!/usr/bin/env python3
 """
 Core OpenCog AtomSpace Python bindings integration for ElizaOS
-Phase 1 implementation: Foundation infrastructure
+
+Connects to a running atomspace-restful server (https://github.com/opencog/atomspace-restful)
+via HTTP when available, and falls back to an in-process dictionary store so the rest of
+the codebase keeps working even without a live OpenCog deployment.
+
+Server environment variables (all optional):
+  ATOMSPACE_HOST   – hostname of atomspace-restful  (default: localhost)
+  ATOMSPACE_PORT   – port of atomspace-restful       (default: 5000)
+  ATOMSPACE_SCHEME_PORT – CogServer telnet port      (default: 17001)
 """
 
 import asyncio
 import logging
+import os
 from typing import Dict, List, Any, Optional, Union
 from datetime import datetime
 import json
 
+try:
+    import aiohttp
+    _AIOHTTP_AVAILABLE = True
+except ImportError:
+    _AIOHTTP_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
+
+_ATOMSPACE_HOST = os.environ.get("ATOMSPACE_HOST", "localhost")
+_ATOMSPACE_PORT = int(os.environ.get("ATOMSPACE_PORT", "5000"))
+_ATOMSPACE_BASE_URL = f"http://{_ATOMSPACE_HOST}:{_ATOMSPACE_PORT}"
 
 class AtomSpaceCore:
     """
-    Core AtomSpace implementation with Python bindings
-    Provides foundation for OpenCog integration with ElizaOS
+    Core AtomSpace implementation.
+
+    When a running atomspace-restful server is reachable the class issues real
+    HTTP requests so that atoms/links are stored in OpenCog's native graph DB.
+    When the server is unavailable it degrades gracefully to an in-process
+    Python-dict store so integration tests keep working offline.
     """
-    
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.atoms = {}
@@ -25,43 +48,112 @@ class AtomSpaceCore:
         self.next_atom_id = 1
         self.next_link_id = 1
         self.initialized = False
-        
+        self._server_available = False
+        self._base_url = self.config.get(
+            "base_url",
+            f"http://{self.config.get('host', _ATOMSPACE_HOST)}:{self.config.get('port', _ATOMSPACE_PORT)}"
+        )
+
+    # ------------------------------------------------------------------
+    # Server connectivity helpers
+    # ------------------------------------------------------------------
+
+    async def _check_server(self) -> bool:
+        """Return True if atomspace-restful is reachable."""
+        if not _AIOHTTP_AVAILABLE:
+            return False
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self._base_url}/api/v1.1/atomspaces",
+                    timeout=aiohttp.ClientTimeout(total=2)
+                ) as resp:
+                    return resp.status < 500
+        except Exception:
+            return False
+
+    async def _rest_get(self, path: str) -> Optional[Any]:
+        """GET from atomspace-restful; returns parsed JSON or None on error."""
+        if not _AIOHTTP_AVAILABLE or not self._server_available:
+            return None
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self._base_url}{path}",
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    if resp.status == 200:
+                        return await resp.json()
+        except Exception as exc:
+            logger.debug(f"AtomSpace REST GET {path} failed: {exc}")
+        return None
+
+    async def _rest_post(self, path: str, payload: Dict) -> Optional[Any]:
+        """POST to atomspace-restful; returns parsed JSON or None on error."""
+        if not _AIOHTTP_AVAILABLE or not self._server_available:
+            return None
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self._base_url}{path}",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=5)
+                ) as resp:
+                    if resp.status in (200, 201):
+                        return await resp.json()
+        except Exception as exc:
+            logger.debug(f"AtomSpace REST POST {path} failed: {exc}")
+        return None
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
     async def initialize(self) -> bool:
-        """Initialize AtomSpace core with configuration"""
+        """Initialize AtomSpace core with configuration."""
         try:
             logger.info("Initializing AtomSpace core...")
-            
-            # Set up basic atom types
+
             self.atom_types = {
                 'ConceptNode': 'concept',
-                'PredicateNode': 'predicate', 
+                'PredicateNode': 'predicate',
                 'NumberNode': 'number',
                 'ListLink': 'list',
                 'EvaluationLink': 'evaluation',
                 'ImplicationLink': 'implication'
             }
-            
-            # Initialize memory structures
+
             self.atoms = {}
             self.links = {}
             self.truth_values = {}
-            
+
+            # Try to reach the real server
+            self._server_available = await self._check_server()
+            if self._server_available:
+                logger.info(f"✅ AtomSpace server reachable at {self._base_url} — using live store")
+            else:
+                logger.info("ℹ️  AtomSpace server not reachable — using in-process fallback store")
+
             self.initialized = True
             logger.info("✅ AtomSpace core initialized successfully")
             return True
-            
+
         except Exception as e:
             logger.error(f"❌ Failed to initialize AtomSpace core: {e}")
             return False
     
     def create_atom(self, atom_type: str, name: str, truth_value: Optional[Dict] = None) -> int:
-        """Create an atom in the AtomSpace"""
+        """Create an atom in the AtomSpace.
+
+        Persists to the REST server when available; always mirrors locally so
+        that callers can introspect atoms without an async call.
+        """
         if not self.initialized:
             raise RuntimeError("AtomSpace not initialized")
-        
+
         atom_id = self.next_atom_id
         self.next_atom_id += 1
-        
+
         atom = {
             'id': atom_id,
             'type': atom_type,
@@ -69,12 +161,36 @@ class AtomSpaceCore:
             'created_at': datetime.now().isoformat(),
             'truth_value': truth_value or {'strength': 1.0, 'confidence': 1.0}
         }
-        
+
         self.atoms[atom_id] = atom
         self.truth_values[atom_id] = atom['truth_value']
-        
+
+        # Fire-and-forget persistence to server (non-blocking)
+        if self._server_available and _AIOHTTP_AVAILABLE:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    asyncio.ensure_future(self._persist_atom(atom))
+            except RuntimeError:
+                pass
+
         logger.debug(f"Created {atom_type} atom '{name}' with ID {atom_id}")
         return atom_id
+
+    async def _persist_atom(self, atom: Dict) -> None:
+        """Attempt to persist an atom to atomspace-restful."""
+        payload = {
+            "type": atom["type"],
+            "name": atom["name"],
+            "truthvalue": {
+                "type": "simple",
+                "details": {
+                    "strength": atom["truth_value"]["strength"],
+                    "count": atom["truth_value"]["confidence"]
+                }
+            }
+        }
+        await self._rest_post("/api/v1.1/atoms", payload)
     
     def create_link(self, link_type: str, outgoing: List[int], truth_value: Optional[Dict] = None) -> int:
         """Create a link between atoms"""
@@ -128,14 +244,43 @@ class AtomSpaceCore:
         return results
     
     def query_by_name(self, name: str) -> List[Dict]:
-        """Query atoms by name pattern"""
+        """Query atoms by name pattern.
+
+        Tries the REST server first so results include atoms that were stored
+        in previous sessions; falls back to local cache.
+        """
         results = []
+
+        # Attempt server-side query (sync wrapper around async helper)
+        if self._server_available and _AIOHTTP_AVAILABLE:
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Schedule coroutine but can't await here; fall through to local cache
+                    pass
+                else:
+                    server_results = loop.run_until_complete(
+                        self._rest_get(f"/api/v1.1/atoms?name={name}&filterby=name")
+                    )
+                    if isinstance(server_results, dict) and "result" in server_results:
+                        for atom in server_results["result"].get("atoms", []):
+                            results.append({
+                                'id': atom.get("handle"),
+                                'type': atom.get("type"),
+                                'name': atom.get("name", ""),
+                                'truth_value': atom.get("truthvalue", {}).get("details", {}),
+                                'source': 'server'
+                            })
+                        return results
+            except Exception as exc:
+                logger.debug(f"Server query_by_name failed, using local cache: {exc}")
+
+        # Local cache fallback
         name_lower = name.lower()
-        
         for atom in self.atoms.values():
             if name_lower in atom['name'].lower():
                 results.append(atom)
-        
+
         return results
     
     def get_incoming_links(self, atom_id: int) -> List[Dict]:

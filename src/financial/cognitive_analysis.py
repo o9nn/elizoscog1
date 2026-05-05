@@ -9,6 +9,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from enum import Enum
+from collections import defaultdict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -510,47 +511,160 @@ class CognitiveFinancialAnalyzer:
             factors=["multi_model_consensus", "weighted_average"]
         )
     
-    # Placeholder anomaly detection methods
     async def _statistical_anomaly_detection(self, data: List[Dict[str, Any]], sensitivity: float) -> List[Dict[str, Any]]:
-        """Statistical anomaly detection using Z-score and IQR methods"""
+        """Statistical anomaly detection using Z-score and IQR methods."""
         anomalies = []
-        
         if not data:
             return anomalies
-        
-        amounts = [t['amount'] for t in data]
-        mean_amount = np.mean(amounts)
-        std_amount = np.std(amounts)
-        
-        # Z-score based anomaly detection
-        threshold = 3.0 * sensitivity  # Adjustable threshold
-        
+
+        amounts = np.array([t['amount'] for t in data])
+        mean_amount = float(np.mean(amounts))
+        std_amount = float(np.std(amounts))
+
+        # IQR-based outlier bounds (robust to non-normal distributions)
+        q1 = float(np.percentile(amounts, 25))
+        q3 = float(np.percentile(amounts, 75))
+        iqr = q3 - q1
+        iqr_multiplier = 1.5 / sensitivity  # tighter with higher sensitivity
+        lower_bound = q1 - iqr_multiplier * iqr
+        upper_bound = q3 + iqr_multiplier * iqr
+
+        # Z-score threshold (adjustable via sensitivity)
+        z_threshold = 3.0 / sensitivity
+
         for transaction in data:
+            amount = transaction['amount']
+            flags = []
+
+            # Z-score check
             if std_amount > 0:
-                z_score = abs(transaction['amount'] - mean_amount) / std_amount
-                if z_score > threshold:
-                    anomalies.append({
-                        "transaction": transaction,
-                        "anomaly_type": "statistical_outlier",
-                        "severity": "high" if z_score > threshold * 1.5 else "medium",
-                        "z_score": z_score,
-                        "explanation": f"Amount ${transaction['amount']:.2f} is {z_score:.1f} standard deviations from mean"
-                    })
-        
+                z_score = abs(amount - mean_amount) / std_amount
+                if z_score > z_threshold:
+                    flags.append(('z_score', z_score))
+
+            # IQR check
+            if amount < lower_bound or amount > upper_bound:
+                flags.append(('iqr_outlier', amount))
+
+            if flags:
+                methods = ', '.join(f[0] for f in flags)
+                z_val = next((f[1] for f in flags if f[0] == 'z_score'), 0.0)
+                severity = "high" if len(flags) >= 2 else "medium"
+                anomalies.append({
+                    "transaction": transaction,
+                    "anomaly_type": "statistical_outlier",
+                    "severity": severity,
+                    "z_score": round(z_val, 2),
+                    "iqr_bounds": (round(lower_bound, 2), round(upper_bound, 2)),
+                    "detection_methods": methods,
+                    "explanation": (
+                        f"Amount ${amount:.2f} flagged by [{methods}]. "
+                        f"Normal range: IQR [{lower_bound:.2f}, {upper_bound:.2f}]"
+                    )
+                })
+
         return anomalies
-    
+
     async def _behavioral_anomaly_detection(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Behavioral anomaly detection"""
-        return []  # Placeholder
-    
-    async def _pattern_anomaly_detection(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Pattern-based anomaly detection"""
-        return []  # Placeholder
-    
+        """Detect behavioural anomalies: unusual category or new merchant."""
+        if len(data) < 10:
+            return []
+        anomalies = []
+        category_amounts: defaultdict = defaultdict(list)
+        for t in data:
+            category_amounts[t['category']].append(t['amount'])
+
+        for t in data:
+            cat = t['category']
+            amounts_for_cat = category_amounts[cat]
+            if len(amounts_for_cat) < 3:
+                continue
+            mean_cat = np.mean(amounts_for_cat)
+            std_cat = np.std(amounts_for_cat)
+            if std_cat > 0:
+                z = abs(t['amount'] - mean_cat) / std_cat
+                if z > 2.5:
+                    anomalies.append({
+                        "transaction": t,
+                        "anomaly_type": "category_behaviour",
+                        "severity": "medium",
+                        "z_score": round(float(z), 2),
+                        "explanation": (
+                            f"Unusual {cat} amount ${t['amount']:.2f} "
+                            f"(category mean ${mean_cat:.2f})"
+                        )
+                    })
+        return anomalies
+
     async def _temporal_anomaly_detection(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Temporal anomaly detection"""
-        return []  # Placeholder
-    
+        """Detect transactions outside normal time patterns (weekend spikes, etc.)."""
+        if len(data) < 5:
+            return []
+
+        anomalies = []
+        # Build daily totals
+        daily_totals: defaultdict = defaultdict(float)
+        for t in data:
+            raw_date = t.get('date', '')[:10]
+            daily_totals[raw_date] += t['amount']
+
+        if len(daily_totals) < 3:
+            return []
+
+        daily_values = np.array(list(daily_totals.values()))
+        mean_daily = float(np.mean(daily_values))
+        std_daily = float(np.std(daily_values))
+
+        for day, total in daily_totals.items():
+            if std_daily > 0:
+                z = abs(total - mean_daily) / std_daily
+                if z > 2.0:
+                    anomalies.append({
+                        "date": day,
+                        "anomaly_type": "daily_spending_spike",
+                        "severity": "low",
+                        "daily_total": round(total, 2),
+                        "z_score": round(float(z), 2),
+                        "explanation": (
+                            f"Daily spend of ${total:.2f} on {day} "
+                            f"is {z:.1f}σ above normal (mean ${mean_daily:.2f})"
+                        )
+                    })
+        return anomalies
+
+    async def _pattern_anomaly_detection(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Detect transactions that break established category-amount patterns."""
+        if len(data) < 15:
+            return []
+
+        anomalies = []
+        # Look for unusual category-description combinations (new merchant in known category)
+        cat_descriptions: defaultdict = defaultdict(set)
+        for t in data:
+            cat_descriptions[t['category']].add(t['description'].lower()[:30])
+
+        # Flag new descriptions in categories that have established patterns
+        seen: defaultdict = defaultdict(set)
+        for t in data:
+            cat = t['category']
+            desc = t['description'].lower()[:30]
+            known = cat_descriptions[cat]
+            if desc not in seen[cat] and len(known) >= 5:
+                seen[cat].add(desc)
+                # Only flag if the category has a well-established history
+                anomalies.append({
+                    "transaction": t,
+                    "anomaly_type": "new_pattern",
+                    "severity": "low",
+                    "explanation": (
+                        f"New transaction description in {cat} category: '{desc}'"
+                    )
+                })
+                if len(anomalies) >= 5:
+                    break  # Limit noise
+
+        return anomalies
+
     def _categorize_anomaly_severity(self, anomalies: Dict[str, List]) -> Dict[str, int]:
         """Categorize anomalies by severity"""
         severity_count = {"high": 0, "medium": 0, "low": 0}
