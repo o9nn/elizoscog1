@@ -265,7 +265,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "Phase 2: ECAN Attention Allocation"
     needs: phase1-cognitive-primitives
-    if: ${{ contains(github.event.inputs.phase_selection, '2') || github.event.inputs.phase_selection == 'all' || github.event.inputs.phase_selection == '' }}
+    if: ${{ always() && needs.phase1-cognitive-primitives.result != 'failure' && (contains(github.event.inputs.phase_selection, '2') || github.event.inputs.phase_selection == 'all' || github.event.inputs.phase_selection == '') }}
     
     steps:
       - name: Checkout Repository
@@ -442,12 +442,17 @@ jobs:
     runs-on: ubuntu-latest
     name: "Phase 3: Neural-Symbolic Synthesis"
     needs: phase2-ecan-attention
-    if: ${{ contains(github.event.inputs.phase_selection, '3') || github.event.inputs.phase_selection == 'all' || github.event.inputs.phase_selection == '' }}
+    if: ${{ always() && needs.phase2-ecan-attention.result != 'failure' && (contains(github.event.inputs.phase_selection, '3') || github.event.inputs.phase_selection == 'all' || github.event.inputs.phase_selection == '') }}
     
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         
+      - name: Setup Python Environment
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          
       - name: Create Phase 3 Issues
         if: ${{ github.event.inputs.create_issues == 'true' || github.event.inputs.create_issues == '' }}
         uses: actions/github-script@v7
@@ -614,7 +619,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "Phase 4: Distributed Cognitive Mesh"
     needs: phase3-neural-symbolic
-    if: ${{ contains(github.event.inputs.phase_selection, '4') || github.event.inputs.phase_selection == 'all' || github.event.inputs.phase_selection == '' }}
+    if: ${{ always() && needs.phase3-neural-symbolic.result != 'failure' && (contains(github.event.inputs.phase_selection, '4') || github.event.inputs.phase_selection == 'all' || github.event.inputs.phase_selection == '') }}
     
     steps:
       - name: Checkout Repository
@@ -745,7 +750,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "Phase 5: Meta-Cognition & Evolution"
     needs: phase4-cognitive-mesh
-    if: ${{ contains(github.event.inputs.phase_selection, '5') || github.event.inputs.phase_selection == 'all' || github.event.inputs.phase_selection == '' }}
+    if: ${{ always() && needs.phase4-cognitive-mesh.result != 'failure' && (contains(github.event.inputs.phase_selection, '5') || github.event.inputs.phase_selection == 'all' || github.event.inputs.phase_selection == '') }}
     
     steps:
       - name: Checkout Repository
@@ -876,7 +881,7 @@ jobs:
     runs-on: ubuntu-latest
     name: "Phase 6: Testing & Cognitive Unification"
     needs: phase5-meta-cognition
-    if: ${{ contains(github.event.inputs.phase_selection, '6') || github.event.inputs.phase_selection == 'all' || github.event.inputs.phase_selection == '' }}
+    if: ${{ always() && needs.phase5-meta-cognition.result != 'failure' && (contains(github.event.inputs.phase_selection, '6') || github.event.inputs.phase_selection == 'all' || github.event.inputs.phase_selection == '') }}
     
     steps:
       - name: Checkout Repository
