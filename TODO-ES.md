@@ -574,6 +574,8 @@ bun run pre-commit
 
 
 
+
+
 ## 🧠 OpenCog Integration
 
 ### Cognitive Architecture Components
@@ -581,13 +583,13 @@ ElizaOS integrates with OpenCog to provide advanced reasoning capabilities:
 
 #### Repository Ecosystem
 
-**Core (9 repositories)**
+**Core (10 repositories)**
 - [eliza](https://github.com/elizaOS/eliza) - Open source agentic operating system
 - [elizaos.github.io](https://github.com/elizaOS/elizaos.github.io) - Leaderboard of Eliza Contributors
 - [knowledge](https://github.com/elizaOS/knowledge) - Data: Ecosystem news, GitHub updates, discussion summaries, and other useful ...
 - [prr](https://github.com/elizaOS/prr) - sits on your PR and won't get up until it's ready
 - [llama.cpp](https://github.com/elizaOS/llama.cpp) - Milady-controlled llama.cpp fork: TurboQuant + QJL + PolarQuant + DFlash unified
-- ... and 4 more repositories
+- ... and 5 more repositories
 
 **Documentation (1 repositories)**
 - [docs](https://github.com/elizaOS/docs) - No description available
@@ -626,6 +628,46 @@ ElizaOS Framework
 - [ ] Design cognitive agent architecture patterns
 - [ ] Implement distributed reasoning coordination
 - [ ] Create OpenCog-aware ElizaOS dashboard components
+
+## 💰 GnuCash Financial Integration
+
+### Intelligent Financial Management
+Combining ElizaOS agents with GnuCash for smart financial management:
+
+#### Financial Agent Ecosystem
+- **Transaction Categorizer**: AI agent for automatic transaction classification
+- **Expense Analyzer**: Pattern recognition for spending behavior analysis
+- **Budget Optimizer**: Intelligent budget planning and optimization
+- **Investment Tracker**: Multi-asset portfolio monitoring and analysis
+- **Financial Assistant**: Conversational interface for financial queries
+- **Alert Manager**: Smart notification system for financial events
+
+#### Fractal Integration Architecture
+```
+ElizaOS Agents (User Interface)
+├── Financial Conversation Agents
+├── Analysis and Reporting Agents
+└── Automation and Alert Agents
+    ↓
+OpenCog Reasoning (Cognitive Layer)  
+├── Financial Pattern Recognition
+├── Predictive Analysis
+└── Decision Support
+    ↓
+GnuCash Data (Storage Layer)
+├── Account Structures
+├── Transaction Records
+└── Financial Reports
+```
+
+### Implementation Features
+- **Natural Language Queries**: Ask questions about finances in plain English
+- **Predictive Analytics**: AI-powered forecasting and trend analysis
+- **Automated Categorization**: Smart transaction classification
+- **Behavioral Insights**: Understanding spending patterns and habits
+- **Goal Tracking**: Intelligent progress monitoring for financial goals
+- **Risk Assessment**: Cognitive evaluation of financial decisions
+
 
 ## 💰 GnuCash Financial Integration
 
