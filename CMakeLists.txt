@@ -737,6 +737,13 @@ set(gnucash_DOCS
     README.dependencies
 )
 
+set(gnucash_DOCS_EXISTING)
+foreach(doc IN LISTS gnucash_DOCS)
+  if (EXISTS "${CMAKE_SOURCE_DIR}/${doc}")
+    list(APPEND gnucash_DOCS_EXISTING ${doc})
+  endif()
+endforeach()
+set(gnucash_DOCS ${gnucash_DOCS_EXISTING})
 
 install(FILES ${gnucash_DOCS} DESTINATION ${CMAKE_INSTALL_DOCDIR})
 
