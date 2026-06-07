@@ -34,18 +34,164 @@ _GNC_NS = {
     'cmdty': 'http://www.gnucash.org/XML/cmdty',
 }
 
+class CurrencyConverter:
+    """
+    Currency conversion utility with exchange rate caching.
+    Supports fetching rates from multiple sources and offline fallback.
+    """
+    
+    # Default exchange rates (offline fallback, USD base)
+    DEFAULT_RATES = {
+        'USD': 1.0,
+        'EUR': 0.92,
+        'GBP': 0.79,
+        'JPY': 149.50,
+        'CAD': 1.36,
+        'AUD': 1.53,
+        'CHF': 0.88,
+        'CNY': 7.24,
+        'INR': 83.12,
+        'MXN': 17.15,
+        'BRL': 4.97,
+        'KRW': 1320.0,
+        'SGD': 1.34,
+        'HKD': 7.82,
+        'NOK': 10.65,
+        'SEK': 10.42,
+        'DKK': 6.87,
+        'NZD': 1.64,
+        'ZAR': 18.45,
+        'RUB': 92.50,
+    }
+    
+    def __init__(self, base_currency: str = 'USD'):
+        self.base_currency = base_currency.upper()
+        self.exchange_rates: Dict[str, float] = dict(self.DEFAULT_RATES)
+        self.rates_updated: Optional[datetime] = None
+        self.rate_sources: List[str] = ['exchangerate-api', 'fixer', 'openexchangerates']
+        self._rate_cache: Dict[str, Dict[str, float]] = {}
+        
+    async def fetch_exchange_rates(self, 
+                                   source: str = 'auto',
+                                   api_key: Optional[str] = None) -> Dict[str, float]:
+        """
+        Fetch current exchange rates from external API.
+        Falls back to cached rates if API is unavailable.
+        
+        Args:
+            source: API source ('exchangerate-api', 'fixer', 'openexchangerates', 'auto')
+            api_key: Optional API key for authenticated sources
+            
+        Returns:
+            Dictionary of currency codes to exchange rates (base: USD)
+        """
+        import aiohttp
+        
+        apis = {
+            'exchangerate-api': f'https://api.exchangerate-api.com/v4/latest/{self.base_currency}',
+            'fixer': f'https://data.fixer.io/api/latest?access_key={api_key}&base={self.base_currency}' if api_key else None,
+        }
+        
+        # Try sources in order
+        sources_to_try = [source] if source != 'auto' else self.rate_sources
+        
+        for src in sources_to_try:
+            url = apis.get(src)
+            if not url:
+                continue
+                
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=5)) as response:
+                        if response.status == 200:
+                            data = await response.json()
+                            rates = data.get('rates', data.get('conversion_rates', {}))
+                            if rates:
+                                self.exchange_rates = {self.base_currency: 1.0, **rates}
+                                self.rates_updated = datetime.now()
+                                logger.info(f"Exchange rates updated from {src}")
+                                return self.exchange_rates
+            except Exception as e:
+                logger.debug(f"Failed to fetch rates from {src}: {e}")
+                continue
+        
+        logger.warning("Using fallback exchange rates (offline mode)")
+        return self.exchange_rates
+    
+    def convert(self, 
+                amount: Decimal, 
+                from_currency: str, 
+                to_currency: str) -> Decimal:
+        """
+        Convert amount between currencies.
+        
+        Args:
+            amount: Amount to convert
+            from_currency: Source currency code (e.g., 'EUR')
+            to_currency: Target currency code (e.g., 'USD')
+            
+        Returns:
+            Converted amount in target currency
+        """
+        from_curr = from_currency.upper()
+        to_curr = to_currency.upper()
+        
+        if from_curr == to_curr:
+            return amount
+        
+        # Get rates relative to base currency
+        from_rate = self.exchange_rates.get(from_curr, 1.0)
+        to_rate = self.exchange_rates.get(to_curr, 1.0)
+        
+        # Convert: amount / from_rate * to_rate
+        if from_rate == 0:
+            from_rate = 1.0
+        
+        converted = Decimal(str(float(amount) / from_rate * to_rate))
+        return converted.quantize(Decimal('0.01'))
+    
+    def get_rate(self, from_currency: str, to_currency: str) -> float:
+        """Get exchange rate between two currencies."""
+        from_rate = self.exchange_rates.get(from_currency.upper(), 1.0)
+        to_rate = self.exchange_rates.get(to_currency.upper(), 1.0)
+        
+        if from_rate == 0:
+            return 0.0
+        return to_rate / from_rate
+    
+    def get_supported_currencies(self) -> List[str]:
+        """Get list of supported currency codes."""
+        return list(self.exchange_rates.keys())
+    
+    def add_custom_rate(self, currency: str, rate: float) -> None:
+        """Add or update a custom exchange rate."""
+        self.exchange_rates[currency.upper()] = rate
+        
+    def is_stale(self, max_age_hours: int = 24) -> bool:
+        """Check if exchange rates are stale and need refresh."""
+        if self.rates_updated is None:
+            return True
+        age = datetime.now() - self.rates_updated
+        return age.total_seconds() > max_age_hours * 3600
+
+
 class GnuCashDataAccess:
     """
-    Core GnuCash database access layer.
+    Core GnuCash database access layer with multi-currency support.
 
     Auto-detects the file format on :meth:`initialize`:
     * If the SQLite ``accounts`` table is present → SQLite backend.
     * Otherwise tries to parse as GnuCash XML (plain or gzip).
     * If the file does not exist at all → creates a minimal SQLite mock DB
       so unit tests work without a real GnuCash file.
+    
+    Multi-currency features:
+    * Automatic currency detection from accounts/transactions
+    * Exchange rate conversion with cached rates
+    * Unified reporting in base currency
     """
 
-    def __init__(self, database_path: str):
+    def __init__(self, database_path: str, base_currency: str = 'USD'):
         self.database_path = database_path
         self.connection = None
         self.initialized = False
@@ -53,6 +199,12 @@ class GnuCashDataAccess:
         # In-memory tables populated when using the XML backend
         self._xml_accounts: List[Dict[str, Any]] = []
         self._xml_transactions: List[Dict[str, Any]] = []
+        
+        # Multi-currency support
+        self.base_currency = base_currency.upper()
+        self.currency_converter = CurrencyConverter(base_currency)
+        self._currency_cache: Dict[str, str] = {}  # account_guid -> currency
+        self._commodities: Dict[str, Dict[str, Any]] = {}  # guid -> commodity info
         
     async def initialize(self) -> bool:
         """Initialize GnuCash database connection.
@@ -564,6 +716,333 @@ class GnuCashDataAccess:
                 'amount': Decimal(row['value_num']) / Decimal(row['value_denom'])
             })
         return results
+    
+    # -------------------------------------------------------------------------
+    # Multi-currency support methods
+    # -------------------------------------------------------------------------
+    
+    async def load_commodities(self) -> Dict[str, Dict[str, Any]]:
+        """Load all commodities (currencies and securities) from the database."""
+        if not self.initialized:
+            raise RuntimeError("Database not initialized")
+        
+        if self._backend == "xml":
+            # For XML backend, commodities are embedded in accounts
+            for acct in self._xml_accounts:
+                commodity_id = acct.get('commodity_guid', 'USD')
+                if commodity_id and commodity_id not in self._commodities:
+                    self._commodities[commodity_id] = {
+                        'guid': commodity_id,
+                        'mnemonic': commodity_id,
+                        'namespace': 'CURRENCY',
+                        'fullname': commodity_id,
+                        'fraction': 100
+                    }
+            return self._commodities
+        
+        cursor = self.connection.cursor()
+        cursor.execute('''
+            SELECT guid, namespace, mnemonic, fullname, fraction
+            FROM commodities
+        ''')
+        
+        for row in cursor.fetchall():
+            self._commodities[row['guid']] = {
+                'guid': row['guid'],
+                'mnemonic': row['mnemonic'],
+                'namespace': row['namespace'],
+                'fullname': row['fullname'],
+                'fraction': row['fraction']
+            }
+        
+        return self._commodities
+    
+    async def get_account_currency(self, account_guid: str) -> str:
+        """Get the currency code for a specific account."""
+        if account_guid in self._currency_cache:
+            return self._currency_cache[account_guid]
+        
+        if not self._commodities:
+            await self.load_commodities()
+        
+        if self._backend == "xml":
+            for acct in self._xml_accounts:
+                if acct['guid'] == account_guid:
+                    commodity_id = acct.get('commodity_guid', self.base_currency)
+                    self._currency_cache[account_guid] = commodity_id
+                    return commodity_id
+            return self.base_currency
+        
+        cursor = self.connection.cursor()
+        cursor.execute('''
+            SELECT c.mnemonic
+            FROM accounts a
+            JOIN commodities c ON a.commodity_guid = c.guid
+            WHERE a.guid = ?
+        ''', (account_guid,))
+        
+        row = cursor.fetchone()
+        currency = row['mnemonic'] if row else self.base_currency
+        self._currency_cache[account_guid] = currency
+        return currency
+    
+    async def get_transactions_with_currency(self,
+                                            start_date: date,
+                                            end_date: date,
+                                            convert_to_base: bool = True) -> List[Dict[str, Any]]:
+        """
+        Get transactions with currency information.
+        
+        Args:
+            start_date: Start date for transaction range
+            end_date: End date for transaction range
+            convert_to_base: If True, convert all amounts to base currency
+            
+        Returns:
+            List of transactions with currency and optional converted amount
+        """
+        if not self.initialized:
+            raise RuntimeError("Database not initialized")
+        
+        # Ensure commodities are loaded
+        if not self._commodities:
+            await self.load_commodities()
+        
+        if self._backend == "xml":
+            transactions = []
+            for t in self._xml_transactions:
+                post_date = t.get('post_date', '')
+                if start_date.isoformat() <= post_date <= end_date.isoformat():
+                    currency = await self.get_account_currency(t.get('account_guid', ''))
+                    amount = t.get('amount', Decimal('0'))
+                    
+                    tx_data = {
+                        **t,
+                        'currency': currency,
+                        'original_amount': amount,
+                    }
+                    
+                    if convert_to_base and currency != self.base_currency:
+                        tx_data['amount'] = self.currency_converter.convert(
+                            amount, currency, self.base_currency
+                        )
+                        tx_data['converted_to'] = self.base_currency
+                    
+                    transactions.append(tx_data)
+            return transactions
+        
+        cursor = self.connection.cursor()
+        cursor.execute('''
+            SELECT t.guid as transaction_guid, t.description, t.post_date,
+                   s.account_guid, s.memo, s.value_num, s.value_denom,
+                   a.name as account_name, a.account_type, a.commodity_guid,
+                   c.mnemonic as currency
+            FROM transactions t
+            JOIN splits s ON t.guid = s.tx_guid
+            JOIN accounts a ON s.account_guid = a.guid
+            LEFT JOIN commodities c ON a.commodity_guid = c.guid
+            WHERE t.post_date >= ? AND t.post_date <= ?
+            ORDER BY t.post_date DESC
+        ''', (start_date.isoformat(), end_date.isoformat()))
+        
+        transactions = []
+        for row in cursor.fetchall():
+            currency = row['currency'] or self.base_currency
+            amount = Decimal(row['value_num']) / Decimal(row['value_denom'])
+            
+            tx_data = {
+                'transaction_guid': row['transaction_guid'],
+                'description': row['description'],
+                'post_date': row['post_date'],
+                'account_guid': row['account_guid'],
+                'account_name': row['account_name'],
+                'account_type': row['account_type'],
+                'memo': row['memo'],
+                'currency': currency,
+                'original_amount': amount,
+                'amount': amount
+            }
+            
+            if convert_to_base and currency != self.base_currency:
+                tx_data['amount'] = self.currency_converter.convert(
+                    amount, currency, self.base_currency
+                )
+                tx_data['converted_to'] = self.base_currency
+            
+            transactions.append(tx_data)
+        
+        return transactions
+    
+    async def get_multi_currency_balance(self,
+                                         account_guid: Optional[str] = None) -> Dict[str, Dict[str, Any]]:
+        """
+        Get account balances organized by currency.
+        
+        Args:
+            account_guid: Optional specific account, or all accounts if None
+            
+        Returns:
+            Dictionary with currency codes as keys, containing balance info
+        """
+        if not self.initialized:
+            raise RuntimeError("Database not initialized")
+        
+        if not self._commodities:
+            await self.load_commodities()
+        
+        balances_by_currency: Dict[str, Dict[str, Any]] = {}
+        
+        if self._backend == "xml":
+            for t in self._xml_transactions:
+                if account_guid and t.get('account_guid') != account_guid:
+                    continue
+                
+                currency = await self.get_account_currency(t.get('account_guid', ''))
+                amount = t.get('amount', Decimal('0'))
+                
+                if currency not in balances_by_currency:
+                    balances_by_currency[currency] = {
+                        'currency': currency,
+                        'total_balance': Decimal('0'),
+                        'accounts': {},
+                        'base_currency_equivalent': Decimal('0')
+                    }
+                
+                acct_name = t.get('account_name', 'Unknown')
+                if acct_name not in balances_by_currency[currency]['accounts']:
+                    balances_by_currency[currency]['accounts'][acct_name] = Decimal('0')
+                
+                balances_by_currency[currency]['accounts'][acct_name] += amount
+                balances_by_currency[currency]['total_balance'] += amount
+        else:
+            cursor = self.connection.cursor()
+            
+            query = '''
+                SELECT a.guid, a.name, a.account_type,
+                       COALESCE(c.mnemonic, 'USD') as currency,
+                       SUM(CAST(s.value_num AS REAL) / s.value_denom) as balance
+                FROM accounts a
+                LEFT JOIN splits s ON a.guid = s.account_guid
+                LEFT JOIN commodities c ON a.commodity_guid = c.guid
+            '''
+            
+            if account_guid:
+                query += ' WHERE a.guid = ?'
+                cursor.execute(query + ' GROUP BY a.guid', (account_guid,))
+            else:
+                cursor.execute(query + ' GROUP BY a.guid')
+            
+            for row in cursor.fetchall():
+                currency = row['currency'] or self.base_currency
+                balance = Decimal(str(row['balance'] or 0))
+                
+                if currency not in balances_by_currency:
+                    balances_by_currency[currency] = {
+                        'currency': currency,
+                        'total_balance': Decimal('0'),
+                        'accounts': {},
+                        'base_currency_equivalent': Decimal('0')
+                    }
+                
+                balances_by_currency[currency]['accounts'][row['name']] = balance
+                balances_by_currency[currency]['total_balance'] += balance
+        
+        # Calculate base currency equivalents
+        for currency, data in balances_by_currency.items():
+            if currency == self.base_currency:
+                data['base_currency_equivalent'] = data['total_balance']
+            else:
+                data['base_currency_equivalent'] = self.currency_converter.convert(
+                    data['total_balance'], currency, self.base_currency
+                )
+        
+        return balances_by_currency
+    
+    async def get_spending_by_currency(self,
+                                       start_date: date,
+                                       end_date: date) -> Dict[str, Dict[str, Decimal]]:
+        """
+        Get spending breakdown by currency and category.
+        
+        Returns:
+            Dictionary with currency codes as keys, containing category spending
+        """
+        if not self.initialized:
+            raise RuntimeError("Database not initialized")
+        
+        transactions = await self.get_transactions_with_currency(
+            start_date, end_date, convert_to_base=False
+        )
+        
+        spending_by_currency: Dict[str, Dict[str, Decimal]] = {}
+        
+        for tx in transactions:
+            if tx.get('account_type') != 'EXPENSE':
+                continue
+            
+            currency = tx.get('currency', self.base_currency)
+            category = tx.get('account_name', 'Uncategorized')
+            amount = abs(tx.get('original_amount', Decimal('0')))
+            
+            if currency not in spending_by_currency:
+                spending_by_currency[currency] = {}
+            
+            if category not in spending_by_currency[currency]:
+                spending_by_currency[currency][category] = Decimal('0')
+            
+            spending_by_currency[currency][category] += amount
+        
+        return spending_by_currency
+    
+    async def refresh_exchange_rates(self, api_key: Optional[str] = None) -> Dict[str, float]:
+        """Refresh exchange rates from external API."""
+        return await self.currency_converter.fetch_exchange_rates(api_key=api_key)
+    
+    def convert_amount(self, 
+                      amount: Decimal, 
+                      from_currency: str, 
+                      to_currency: Optional[str] = None) -> Decimal:
+        """
+        Convert an amount between currencies.
+        
+        Args:
+            amount: Amount to convert
+            from_currency: Source currency code
+            to_currency: Target currency (defaults to base_currency)
+            
+        Returns:
+            Converted amount
+        """
+        target = to_currency or self.base_currency
+        return self.currency_converter.convert(amount, from_currency, target)
+    
+    async def get_currency_summary(self) -> Dict[str, Any]:
+        """
+        Get a summary of all currencies used in the database.
+        
+        Returns:
+            Summary including currency list, default currency, and exchange rates
+        """
+        if not self._commodities:
+            await self.load_commodities()
+        
+        currencies = [
+            c for c in self._commodities.values()
+            if c.get('namespace') == 'CURRENCY'
+        ]
+        
+        balances = await self.get_multi_currency_balance()
+        
+        return {
+            'base_currency': self.base_currency,
+            'currencies_in_use': list(balances.keys()),
+            'available_currencies': [c['mnemonic'] for c in currencies],
+            'exchange_rates': dict(self.currency_converter.exchange_rates),
+            'rates_updated': self.currency_converter.rates_updated.isoformat() if self.currency_converter.rates_updated else None,
+            'total_in_base_currency': sum(
+                data['base_currency_equivalent'] for data in balances.values()
+            )
+        }
     
     async def close(self):
         """Close database connection"""
