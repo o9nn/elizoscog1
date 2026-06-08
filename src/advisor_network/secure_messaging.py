@@ -140,6 +140,10 @@ class MessageEncryptor:
     Handles message encryption and decryption
     
     Provides end-to-end encryption for agent communications
+    
+    WARNING: This implementation uses XOR-based encryption for DEMONSTRATION ONLY.
+    For production use, replace the encrypt/decrypt methods with actual AES-256-GCM
+    using a proper cryptographic library (e.g., cryptography.hazmat.primitives.ciphers.aead).
     """
     
     def __init__(self):
@@ -171,8 +175,10 @@ class MessageEncryptor:
         # Generate nonce
         nonce = secrets.token_bytes(12)
         
-        # In production, use proper AES-GCM encryption
-        # For now, we use a simple XOR-based demonstration
+        # WARNING: XOR-based encryption is for DEMONSTRATION ONLY
+        # PRODUCTION USE REQUIRES: Replace with actual AES-256-GCM encryption
+        # using a library like cryptography.hazmat.primitives.ciphers.aead.AESGCM
+        # The current implementation provides NO real security guarantees.
         key_stream = self._generate_key_stream(key, nonce, len(plaintext))
         ciphertext = bytes(a ^ b for a, b in zip(plaintext, key_stream))
         
