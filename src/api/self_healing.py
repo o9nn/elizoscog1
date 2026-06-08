@@ -11,6 +11,7 @@ Provides automatic recovery and self-healing capabilities including:
 
 import asyncio
 import logging
+import random
 import time
 from typing import Dict, List, Any, Optional, Callable, Set
 from dataclasses import dataclass, field
@@ -201,9 +202,23 @@ class HealthMonitor:
     - Anomaly detection
     - Health status aggregation
     - Alert generation
+    
+    Args:
+        node_id: Unique identifier for this monitoring node
+        response_time_threshold_ms: Max acceptable response time (default: 100ms)
+        error_rate_threshold: Max acceptable error rate (default: 0.1 = 10%)
+        memory_threshold_percent: Memory usage threshold for unhealthy status (default: 90%)
+        cpu_threshold_percent: CPU usage threshold for unhealthy status (default: 90%)
     """
     
-    def __init__(self, node_id: str):
+    def __init__(
+        self, 
+        node_id: str,
+        response_time_threshold_ms: float = 100.0,
+        error_rate_threshold: float = 0.1,
+        memory_threshold_percent: float = 90.0,
+        cpu_threshold_percent: float = 90.0
+    ):
         self.node_id = node_id
         
         # Health checks
@@ -218,11 +233,11 @@ class HealthMonitor:
         self._monitor_task: Optional[asyncio.Task] = None
         self._alert_handlers: List[Callable] = []
         
-        # Thresholds
-        self.response_time_threshold_ms = 100.0
-        self.error_rate_threshold = 0.1
-        self.memory_threshold_percent = 90.0
-        self.cpu_threshold_percent = 90.0
+        # Configurable thresholds
+        self.response_time_threshold_ms = response_time_threshold_ms
+        self.error_rate_threshold = error_rate_threshold
+        self.memory_threshold_percent = memory_threshold_percent
+        self.cpu_threshold_percent = cpu_threshold_percent
         
         self.logger = logging.getLogger(__name__)
     
@@ -494,7 +509,6 @@ class LoadBalancer:
             return None
         
         # Calculate weighted scores
-        import random
         weighted_choices = []
         for node_id in healthy_nodes:
             weight = self._node_weights.get(node_id, 1.0)

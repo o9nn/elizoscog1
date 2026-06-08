@@ -22,6 +22,10 @@ from collections import defaultdict
 import heapq
 
 
+# Configuration constants
+MAX_BACKOFF_SECONDS = 30  # Maximum wait time for retry backoff
+
+
 class TaskStatus(Enum):
     """Task execution status"""
     PENDING = "pending"
@@ -450,8 +454,8 @@ class TaskOrchestrator:
                 retry_count=current_retry
             )
         
-        # Exponential backoff
-        wait_time = min(2 ** current_retry, 30)  # Max 30 seconds
+        # Exponential backoff with configurable maximum
+        wait_time = min(2 ** current_retry, MAX_BACKOFF_SECONDS)
         await asyncio.sleep(wait_time)
         
         self._metrics["retry_count"] += 1
