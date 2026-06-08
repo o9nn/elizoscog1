@@ -94,7 +94,7 @@ class SecurityAuditEvent:
         self.result = result  # success, failure, blocked
         self.details = details or {}
         self.timestamp = datetime.now()
-        self.ip_address = details.get("ip_address", "unknown")
+        self.ip_address = self.details.get("ip_address", "unknown")
 
 
 class AuthenticationManager:
@@ -239,7 +239,8 @@ class AuthenticationManager:
         # Generate token
         token = jwt.encode(payload, self.jwt_secret, algorithm="HS256")
         
-        # Store active session
+        # Store active session - handle None additional_claims
+        additional_claims = additional_claims or {}
         self.active_sessions[token] = {
             "user_id": user_id,
             "created_at": now,

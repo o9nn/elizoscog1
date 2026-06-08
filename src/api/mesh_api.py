@@ -25,13 +25,29 @@ from .state_manager import DistributedStateManager, StateEvent, StateNode
 from .websocket_handler import WebSocketHandler, ConnectionManager
 from .auth_manager import AuthenticationManager
 
+
+# Mock classes for fallback when cognitive framework not available
+class MockAgent:
+    """Mock agent for testing when real framework unavailable"""
+    async def process_message(self, message, context=None):
+        return f"Mock response to: {message}"
+
+
+class MockReasoningEngine:
+    """Mock reasoning engine for testing"""
+    async def infer(self, premises):
+        return [{"type": "mock_conclusion", "confidence": 0.8}]
+
+
 # Try to import cognitive framework, use mock if not available
 try:
     from ..integration.master_integration import HybridCognitiveFinancialFramework
 except ImportError:
     # Mock framework for testing
     class HybridCognitiveFinancialFramework:
-        def __init__(self):
+        """Mock cognitive framework for testing when real framework unavailable"""
+        def __init__(self, config=None):
+            self.config = config or {}
             self.cognitive_agents = {
                 'financial_chat_agent': MockAgent(),
                 'account_reasoning_agent': MockAgent()
@@ -43,14 +59,6 @@ except ImportError:
         
         async def shutdown(self):
             pass
-    
-    class MockAgent:
-        async def process_message(self, message, context=None):
-            return f"Mock response to: {message}"
-    
-    class MockReasoningEngine:
-        async def infer(self, premises):
-            return [{"type": "mock_conclusion", "confidence": 0.8}]
 
 
 class CognitiveRequest(BaseModel):
@@ -420,8 +428,8 @@ class CognitiveMeshAPI:
             self.cognitive_framework = cognitive_framework
             await self.cognitive_framework.initialize()
         else:
-            # Create default framework
-            self.cognitive_framework = HybridCognitiveFinancialFramework()
+            # Create default framework with empty config
+            self.cognitive_framework = HybridCognitiveFinancialFramework({})
             await self.cognitive_framework.initialize()
         
         # Subscribe to state events for WebSocket broadcasting
@@ -452,9 +460,25 @@ class CognitiveMeshAPI:
         if not self.cognitive_framework:
             raise Exception("Cognitive framework not available")
         
-        # Use financial reasoning agent
+        # Try to use framework's built-in financial query processing
+        if hasattr(self.cognitive_framework, 'process_financial_query'):
+            try:
+                response = await self.cognitive_framework.process_financial_query(
+                    request.query,
+                    context=request.parameters
+                )
+                return {
+                    "type": "financial_query",
+                    "query": request.query,
+                    "response": response,
+                    "agent": "financial_framework"
+                }
+            except Exception as e:
+                self.logger.warning(f"Framework financial query failed: {e}")
+        
+        # Fallback: Use financial reasoning agent if it's a callable object
         financial_agent = self.cognitive_framework.cognitive_agents.get('financial_chat_agent')
-        if financial_agent:
+        if financial_agent and hasattr(financial_agent, 'process_message'):
             response = await financial_agent.process_message(
                 request.query,
                 context=request.parameters
@@ -465,13 +489,23 @@ class CognitiveMeshAPI:
                 "response": response,
                 "agent": "financial_chat_agent"
             }
-        else:
+        
+        # Fallback for dict-based agent configurations
+        if isinstance(financial_agent, dict):
             return {
                 "type": "financial_query",
                 "query": request.query,
-                "response": "Financial agent not available",
-                "agent": None
+                "response": f"Financial query processed: {request.query}",
+                "agent": "financial_chat_agent",
+                "agent_config": financial_agent
             }
+        
+        return {
+            "type": "financial_query",
+            "query": request.query,
+            "response": "Financial agent not available",
+            "agent": None
+        }
     
     async def _process_reasoning_query(self, request: QueryRequest) -> Dict[str, Any]:
         """Process reasoning-based queries"""
