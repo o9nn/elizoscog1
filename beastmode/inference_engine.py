@@ -106,14 +106,15 @@ class KernelSelector:
         self.exploration_rate = 0.05  # 5% exploration
         self.decay_factor = 0.99
         
-        # Performance baselines
+        # Performance baselines (relative latency multipliers, lower = faster)
+        # Values represent expected latency relative to CPU_X86_64 baseline
         self.architecture_baselines: Dict[KernelArchitecture, float] = {
-            KernelArchitecture.CPU_X86_64: 1.0,
-            KernelArchitecture.CPU_ARM64: 1.1,  # ARM typically 10% slower for heavy compute
-            KernelArchitecture.GPU_CUDA: 0.1,   # GPU 10x faster for parallel ops
-            KernelArchitecture.GPU_OPENCL: 0.15,
-            KernelArchitecture.TPU_V4: 0.05,    # TPU 20x faster for tensor ops
-            KernelArchitecture.TPU_V5: 0.03
+            KernelArchitecture.CPU_X86_64: 1.0,   # Baseline
+            KernelArchitecture.CPU_ARM64: 1.1,   # 1.1x latency (10% slower for heavy compute)
+            KernelArchitecture.GPU_CUDA: 0.1,    # 0.1x latency (10x faster for parallel ops)
+            KernelArchitecture.GPU_OPENCL: 0.15, # 0.15x latency
+            KernelArchitecture.TPU_V4: 0.05,     # 0.05x latency (20x faster for tensor ops)
+            KernelArchitecture.TPU_V5: 0.03      # 0.03x latency
         }
         
         logger.info(f"KernelSelector initialized with strategy: {strategy.value}")
@@ -134,7 +135,9 @@ class KernelSelector:
             size_class = InputCharacteristics.LARGE_DENSE
         
         # Check for sparsity (more than 50% zeros)
-        zero_ratio = sum(np.count_nonzero(t.data == 0) for t in tensors) / max(total_elements, 1)
+        # np.sum(t.data == 0) counts elements that are zero
+        zero_count = sum(np.sum(t.data == 0) for t in tensors)
+        zero_ratio = zero_count / max(total_elements, 1)
         if zero_ratio > 0.5:
             return InputCharacteristics.SPARSE
         

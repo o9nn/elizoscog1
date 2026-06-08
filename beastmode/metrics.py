@@ -22,6 +22,9 @@ from enum import Enum
 
 logger = logging.getLogger(__name__)
 
+# Constants for safe division operations
+MIN_DIVISOR = 0.001  # Minimum value to prevent division by zero
+
 
 class MetricType(Enum):
     """Types of metrics to track"""
@@ -126,10 +129,10 @@ class PerformanceTracker:
         
         # For latency/memory, lower is better
         if metric_type in [MetricType.LATENCY, MetricType.MEMORY, MetricType.ERROR_RATE]:
-            return (baseline - current) / max(baseline, 0.001)
+            return (baseline - current) / max(baseline, MIN_DIVISOR)
         else:
             # For throughput/cache_hit_rate, higher is better
-            return (current - baseline) / max(baseline, 0.001)
+            return (current - baseline) / max(baseline, MIN_DIVISOR)
     
     def detect_anomalies(self, metric_type: MetricType) -> List[MetricPoint]:
         """Detect anomalous metric values"""
@@ -275,7 +278,7 @@ class LatencyProfiler:
         # Calculate percentage of total
         total_mean = sum(p['mean_ms'] for p in breakdown.values())
         for phase in breakdown.values():
-            phase['pct_of_total'] = phase['mean_ms'] / max(total_mean, 0.001)
+            phase['pct_of_total'] = phase['mean_ms'] / max(total_mean, MIN_DIVISOR)
         
         return breakdown
 
@@ -305,7 +308,7 @@ class ThroughputMonitor:
     
     def record(self, operations: int, duration_sec: float):
         """Record throughput measurement"""
-        throughput = operations / max(duration_sec, 0.001)
+        throughput = operations / max(duration_sec, MIN_DIVISOR)
         
         self.measurements.append({
             'timestamp': time.time(),
@@ -334,7 +337,7 @@ class ThroughputMonitor:
         total_ops = sum(m['operations'] for m in recent)
         total_time = sum(m['duration_sec'] for m in recent)
         
-        return total_ops / max(total_time, 0.001)
+        return total_ops / max(total_time, MIN_DIVISOR)
     
     def get_target_achievement(self) -> float:
         """Get percentage of target throughput achieved"""
