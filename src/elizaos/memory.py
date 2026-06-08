@@ -631,7 +631,7 @@ class AtomSpaceMemoryBackend:
         # Import AtomSpace bindings if available
         try:
             from opencog.atomspace import AtomSpace, types
-            from opencog.type_constructors import *
+            # Note: type_constructors import would need to be at module level
             self.AtomSpace = AtomSpace
             self.types = types
             self.atomspace_available = True
@@ -852,4 +852,3 @@ class HybridMemoryManager(EnhancedMemoryManager):
                     memories.append(memory)
         
         return memories
-            logger.info("📴 Memory manager connection closed")

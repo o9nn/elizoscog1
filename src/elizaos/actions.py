@@ -730,8 +730,9 @@ class PLNReasoningAction(BaseAction):
         )
         self.pln_available = False
         try:
-            # Try to import OpenCog PLN
-            from opencog.pln import *
+            # Try to import OpenCog PLN module
+            import importlib
+            pln_module = importlib.import_module('opencog.pln')
             self.pln_available = True
         except ImportError:
             logger.warning("OpenCog PLN not available, using fallback reasoning")
@@ -1042,4 +1043,3 @@ class PLNActionSelector(BaseAction):
         
         # Cap score at 1.0
         return min(1.0, score)
-    return a + b
