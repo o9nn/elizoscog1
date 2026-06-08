@@ -110,7 +110,13 @@ class CognitiveMeshAPI:
     - Distributed state synchronization
     - Authentication and rate limiting
     - External system bindings
+    - API versioning and backward compatibility
     """
+    
+    # API Version information
+    API_VERSION = "1.0.0"
+    SUPPORTED_VERSIONS = ["1.0", "1.0.0"]
+    MIN_SUPPORTED_VERSION = "1.0"
     
     def __init__(self, node_id: str, port: int = 8000, host: str = "0.0.0.0"):
         self.node_id = node_id
@@ -123,11 +129,11 @@ class CognitiveMeshAPI:
         self.auth_manager = AuthenticationManager()
         self.cognitive_framework: Optional[HybridCognitiveFinancialFramework] = None
         
-        # FastAPI app
+        # FastAPI app with API versioning
         self.app = FastAPI(
             title="Cognitive Mesh API",
-            description="Distributed Cognitive Operations API",
-            version="1.0.0",
+            description="Distributed Cognitive Operations API with versioning support",
+            version=self.API_VERSION,
             docs_url="/docs",
             redoc_url="/redoc"
         )
@@ -168,6 +174,36 @@ class CognitiveMeshAPI:
                 message="System status retrieved",
                 node_id=self.node_id
             )
+        
+        # API Version endpoint
+        @self.app.get("/api/version")
+        async def get_api_version():
+            """Get API version information"""
+            return {
+                "current_version": self.API_VERSION,
+                "supported_versions": self.SUPPORTED_VERSIONS,
+                "min_supported_version": self.MIN_SUPPORTED_VERSION,
+                "node_id": self.node_id,
+                "timestamp": datetime.now().isoformat()
+            }
+        
+        # Version-specific endpoints (v1)
+        @self.app.get("/api/v1/version")
+        async def get_v1_version():
+            """Get v1 API version details"""
+            return {
+                "version": "1.0.0",
+                "status": "active",
+                "deprecation_date": None,
+                "features": [
+                    "state_management",
+                    "cognitive_queries",
+                    "distributed_tasks",
+                    "node_management",
+                    "websocket_streaming",
+                    "authentication"
+                ]
+            }
         
         # State management endpoints
         @self.app.put("/api/v1/state")
