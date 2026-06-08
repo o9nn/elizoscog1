@@ -5,6 +5,7 @@ Tests the Phase 6 implementation features.
 
 import pytest
 import asyncio
+import random
 from datetime import datetime, timedelta
 from typing import List, Dict, Any
 
@@ -60,7 +61,6 @@ def generate_test_transactions(months: int = 12) -> List[Dict[str, Any]]:
             # Add some variance
             base = base_amounts[category]
             variance = base * 0.2  # 20% variance
-            import random
             amount = base + random.uniform(-variance, variance)
             
             transactions.append({

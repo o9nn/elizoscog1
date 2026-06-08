@@ -636,12 +636,24 @@ class InvestmentAdviceCoordinator:
         ratio = fv / goal.target_amount if goal.target_amount > 0 else 1.0
         
         # Apply uncertainty factor based on time horizon and volatility
+        # Base uncertainty (10%) increases by 2% per year to account for market volatility
         uncertainty = 0.1 + (years * 0.02)  # Longer = more uncertainty
         
         if ratio >= 1.0:
-            return min(0.95, 0.7 + (ratio - 1.0) * 0.2)
+            # When projected value exceeds target:
+            # - Base success probability (0.7) + bonus for surplus (up to 0.25)
+            # - Capped at 0.95 to reflect inherent market uncertainty
+            base_success_prob = 0.7
+            surplus_bonus_factor = 0.2  # Max 20% bonus per 100% surplus
+            max_probability = 0.95
+            return min(max_probability, base_success_prob + (ratio - 1.0) * surplus_bonus_factor)
         else:
-            return max(0.1, ratio * (1 - uncertainty))
+            # When projected value is below target:
+            # - Scale probability by ratio (how close to target)
+            # - Apply uncertainty discount
+            # - Minimum 10% probability to avoid zero-probability scenarios
+            min_probability = 0.1
+            return max(min_probability, ratio * (1 - uncertainty))
     
     def _determine_needed_adjustments(
         self,

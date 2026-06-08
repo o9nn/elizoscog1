@@ -81,6 +81,13 @@ class PredictiveBudgetingEngine:
     identifies budget variances, and provides actionable recommendations.
     """
     
+    # Z-score values for common confidence levels
+    CONFIDENCE_Z_SCORES = {
+        0.90: 1.645,
+        0.95: 1.96,
+        0.99: 2.576
+    }
+    
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         self.config = config or {}
         self.smoothing_alpha = self.config.get('smoothing_alpha', 0.3)
@@ -95,6 +102,15 @@ class PredictiveBudgetingEngine:
         
         # Seasonal adjustment factors by category
         self.seasonal_factors: Dict[str, List[float]] = {}
+    
+    def _get_z_score_for_confidence(self) -> float:
+        """Get z-score based on configured confidence level."""
+        # Find closest matching confidence level
+        if self.confidence_level in self.CONFIDENCE_Z_SCORES:
+            return self.CONFIDENCE_Z_SCORES[self.confidence_level]
+        
+        # Default to 95% confidence z-score
+        return 1.96
         
     async def train_on_historical_data(
         self, 
@@ -272,9 +288,9 @@ class PredictiveBudgetingEngine:
                 seasonal_factor = self.seasonal_factors[category][future_month - 1]
                 predicted_amount *= seasonal_factor
             
-            # Calculate confidence interval
+            # Calculate confidence interval using configured confidence level
             std_dev = np.std(history) if len(history) > 1 else predicted_amount * 0.2
-            z_score = 1.96  # 95% confidence
+            z_score = self._get_z_score_for_confidence()
             lower_bound = max(0, predicted_amount - z_score * std_dev)
             upper_bound = predicted_amount + z_score * std_dev
             
