@@ -894,16 +894,17 @@ async def run_all_tests():
     )
     
     # Check which tests passed for criteria display
-    concurrent_passed = any('concurrent connections' in str(err) or 
-                           'concurrent' not in str(err).lower() 
+    # These check that no errors exist for specific features
+    # Using all() to ensure NONE of the errors match the pattern
+    concurrent_passed = all('concurrent' not in str(err).lower() 
                            for err in all_errors) if all_errors else True
-    sync_passed = any('synchronization' not in str(err).lower() 
+    sync_passed = all('synchronization' not in str(err).lower() 
                      for err in all_errors) if all_errors else True
-    auth_passed = any('authentication' not in str(err).lower() and 
+    auth_passed = all('authentication' not in str(err).lower() and 
                      'JWT' not in str(err) and 
                      'rate' not in str(err).lower()
                      for err in all_errors) if all_errors else True
-    external_passed = any('Unity' not in str(err) and 
+    external_passed = all('Unity' not in str(err) and 
                          'ROS' not in str(err) and 
                          'Web agent' not in str(err)
                          for err in all_errors) if all_errors else True
@@ -911,10 +912,10 @@ async def run_all_tests():
     print(f"\n🎯 PHASE 4 SUCCESS CRITERIA:")
     print(f"  • Sub-100ms API response times:     {'✅' if avg_response_time < 100 else '❌'}")
     print(f"  • 99.9% API availability:           {'✅' if total_failed == 0 else '❌'} (simulated)")
-    print(f"  • 1000+ concurrent connections:     {'✅' if total_failed == 0 or concurrent_passed else '❌'}")
-    print(f"  • Real-time state synchronization:  {'✅' if total_failed == 0 or sync_passed else '❌'}")
-    print(f"  • Authentication & security:        {'✅' if total_failed == 0 or auth_passed else '❌'}")
-    print(f"  • External system bindings:         {'✅' if total_failed == 0 or external_passed else '❌'}")
+    print(f"  • 1000+ concurrent connections:     {'✅' if total_failed == 0 and concurrent_passed else '❌'}")
+    print(f"  • Real-time state synchronization:  {'✅' if total_failed == 0 and sync_passed else '❌'}")
+    print(f"  • Authentication & security:        {'✅' if total_failed == 0 and auth_passed else '❌'}")
+    print(f"  • External system bindings:         {'✅' if total_failed == 0 and external_passed else '❌'}")
     
     print(f"\n🌟 OVERALL RESULT: {'✅ SUCCESS - Phase 4 APIs Ready for Production!' if overall_success else '❌ NEEDS ATTENTION - Some issues require resolution'}")
     
