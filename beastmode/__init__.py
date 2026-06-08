@@ -17,33 +17,56 @@ Key Components:
 - InferenceAccelerator: Optimized tensor operation execution
 - PerformanceMonitor: Continuous performance tracking and regression detection
 - AdaptiveOptimizer: Self-tuning performance optimization
+- CrossPlatformValidator: Cross-platform consistency validation
+- RegressionTester: Automated regression testing
 """
 
 from .inference_engine import (
     InferenceAccelerator,
     create_accelerator,
-    AcceleratorConfig
+    AcceleratorConfig,
+    ExecutionMode,
+    ExecutionResult
 )
 from .tensor_validator import (
     TensorSignatureValidator,
     ValidationResult,
+    ValidationLevel,
     create_validator
 )
 from .performance_monitor import (
     PerformanceMonitor,
     PerformanceMetrics,
     RegressionAlert,
+    AlertSeverity,
     create_monitor
 )
 from .adaptive_optimizer import (
     AdaptiveOptimizer,
     OptimizationStrategy,
+    OptimizationConfig,
+    OptimizationResult,
     create_optimizer
+)
+from .cross_platform import (
+    CrossPlatformValidator,
+    CrossPlatformResult,
+    PlatformInfo,
+    create_cross_platform_validator
+)
+from .regression_testing import (
+    RegressionTester,
+    RegressionResult,
+    RegressionSeverity,
+    RegressionTestConfig,
+    PerformanceBaseline,
+    create_regression_tester
 )
 from .benchmarks import (
     run_comprehensive_benchmark,
     run_quick_benchmark,
-    generate_performance_report
+    generate_performance_report,
+    BenchmarkConfig
 )
 
 __all__ = [
@@ -51,27 +74,48 @@ __all__ = [
     'InferenceAccelerator',
     'create_accelerator',
     'AcceleratorConfig',
+    'ExecutionMode',
+    'ExecutionResult',
     
     # Validation
     'TensorSignatureValidator',
     'ValidationResult',
+    'ValidationLevel',
     'create_validator',
     
     # Performance Monitoring
     'PerformanceMonitor',
     'PerformanceMetrics',
     'RegressionAlert',
+    'AlertSeverity',
     'create_monitor',
     
     # Adaptive Optimization
     'AdaptiveOptimizer',
     'OptimizationStrategy',
+    'OptimizationConfig',
+    'OptimizationResult',
     'create_optimizer',
+    
+    # Cross-Platform Validation
+    'CrossPlatformValidator',
+    'CrossPlatformResult',
+    'PlatformInfo',
+    'create_cross_platform_validator',
+    
+    # Regression Testing
+    'RegressionTester',
+    'RegressionResult',
+    'RegressionSeverity',
+    'RegressionTestConfig',
+    'PerformanceBaseline',
+    'create_regression_tester',
     
     # Benchmarks
     'run_comprehensive_benchmark',
     'run_quick_benchmark',
-    'generate_performance_report'
+    'generate_performance_report',
+    'BenchmarkConfig'
 ]
 
 __version__ = '1.0.0'
