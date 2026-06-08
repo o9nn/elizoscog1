@@ -1124,6 +1124,7 @@ class RealDataValidationEngine:
     def export_validation_results(self, filepath: str) -> None:
         """Export validation results to JSON file"""
         export_data = {
+            'timestamp': time.time(),
             'datasets': {name: {
                 'type': dataset.dataset_type.value,
                 'metadata': dataset.metadata,
