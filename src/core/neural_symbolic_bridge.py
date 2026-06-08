@@ -256,7 +256,7 @@ class NeuralSymbolicBridge:
             
             # Perform tensor operation if specified
             tensor_data = None
-            if tensor_operation and len(outgoing_atoms) >= 1:
+            if tensor_operation is not None and len(outgoing_atoms) >= 1:
                 # Get tensors from outgoing atoms
                 tensors = []
                 for atom_id in outgoing_atoms:
