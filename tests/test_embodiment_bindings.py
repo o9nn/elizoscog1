@@ -415,7 +415,9 @@ class TestIntegrationWithMasterFramework:
         try:
             from integration.master_integration import HybridCognitiveFinancialFramework
             
-            framework = HybridCognitiveFinancialFramework()
+            # Provide empty config to satisfy initialization requirements
+            config = {}
+            framework = HybridCognitiveFinancialFramework(config)
             
             # Test API methods exist
             assert hasattr(framework, 'register_embodied_agent')
