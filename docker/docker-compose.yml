@@ -183,6 +183,68 @@ services:
         delay: 5s
         max_attempts: 3
 
+  # OpenCog AtomSpace RESTful Service
+  atomspace-restful:
+    image: opencog/atomspace-restful:latest
+    container_name: elizoscog-atomspace
+    ports:
+      - "5000:5000"
+    environment:
+      - ATOMSPACE_HOST=0.0.0.0
+      - ATOMSPACE_PORT=5000
+      - GUILE_AUTO_COMPILE=0
+      - PYTHONDONTWRITEBYTECODE=1
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5000/api/v1.1/atomspaces"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - elizoscog-mesh
+    restart: unless-stopped
+    volumes:
+      - atomspace-data:/var/lib/atomspace
+      - ./configs/pln-rules:/opt/opencog/rules:ro
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+        reservations:
+          memory: 1G
+          cpus: "0.5"
+
+  # OpenCog CogServer for Scheme evaluation
+  cogserver:
+    image: opencog/cogserver:latest
+    container_name: elizoscog-cogserver
+    ports:
+      - "17001:17001"
+    environment:
+      - COGSERVER_PORT=17001
+      - GUILE_AUTO_COMPILE=0
+    depends_on:
+      atomspace-restful:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "17001"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - elizoscog-mesh
+    restart: unless-stopped
+    volumes:
+      - atomspace-data:/var/lib/atomspace
+      - ./configs/pln-rules:/opt/opencog/rules:ro
+      - ./configs/cogserver-init.scm:/opt/opencog/init.scm:ro
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: "1.0"
+
   # GGML ML Service
   ggml-service:
     build:
@@ -375,3 +437,4 @@ volumes:
   grafana-data:
   security-reports:
   performance-reports:
+  atomspace-data:

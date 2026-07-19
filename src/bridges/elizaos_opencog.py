@@ -1,144 +1,271 @@
 """
 ElizaOS-OpenCog Bridge Implementation
-Provides integration between ElizaOS agents and OpenCog AtomSpace
+
+Connects ElizaOS agents to OpenCog AtomSpace via:
+1. Real HTTP calls to a running atomspace-restful server when reachable.
+2. HTTP calls to a running ElizaOS server for agent actions.
+3. Graceful fallback to in-process simulation so unit tests work offline.
+
+Environment variables (all optional):
+  ATOMSPACE_HOST / ATOMSPACE_PORT    – atomspace-restful server (default localhost:5000)
+  ELIZAOS_HOST  / ELIZAOS_PORT       – ElizaOS API server      (default localhost:3000)
 """
 
-from typing import Dict, List, Any, Optional
-import sys
 import os
+import asyncio
+import logging
+from typing import Dict, List, Any, Optional
+
+try:
+    import aiohttp
+    _AIOHTTP_AVAILABLE = True
+except ImportError:
+    _AIOHTTP_AVAILABLE = False
+
+import sys
+import os as _os
 
 # Add financial package to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), '..'))
 
 try:
     from financial import FinancialReasoningEngine
 except ImportError:
     FinancialReasoningEngine = None
 
+logger = logging.getLogger(__name__)
+
+_ATOMSPACE_BASE = (
+    f"http://{os.environ.get('ATOMSPACE_HOST', 'localhost')}"
+    f":{os.environ.get('ATOMSPACE_PORT', '5000')}"
+)
+_ELIZAOS_BASE = (
+    f"http://{os.environ.get('ELIZAOS_HOST', 'localhost')}"
+    f":{os.environ.get('ELIZAOS_PORT', '3000')}"
+)
+
+
+async def _http_get(url: str, timeout: float = 5.0) -> Optional[Any]:
+    """Perform an async GET; return parsed JSON or None on any error."""
+    if not _AIOHTTP_AVAILABLE:
+        return None
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout)) as resp:
+                if resp.status == 200:
+                    return await resp.json()
+    except Exception as exc:
+        logger.debug(f"GET {url} failed: {exc}")
+    return None
+
+
+async def _http_post(url: str, payload: Dict, timeout: float = 5.0) -> Optional[Any]:
+    """Perform an async POST; return parsed JSON or None on any error."""
+    if not _AIOHTTP_AVAILABLE:
+        return None
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(
+                url, json=payload, timeout=aiohttp.ClientTimeout(total=timeout)
+            ) as resp:
+                if resp.status in (200, 201):
+                    return await resp.json()
+    except Exception as exc:
+        logger.debug(f"POST {url} failed: {exc}")
+    return None
+
 
 class AtomSpaceProvider:
-    """ElizaOS provider for OpenCog AtomSpace operations"""
-    
+    """ElizaOS provider for OpenCog AtomSpace operations.
+
+    Issues real HTTP requests to atomspace-restful when the server is
+    reachable.  Falls back to an in-process dict store otherwise.
+    """
+
     def __init__(self, atomspace_config: Dict[str, Any]):
         self.config = atomspace_config
-        self.atomspace = None  # Will be initialized with actual AtomSpace
-        
+        self._base_url = (
+            f"http://{atomspace_config.get('host', 'localhost')}"
+            f":{atomspace_config.get('port', 5000)}"
+        )
+        self.atomspace = None
+        self._server_available = False
+
     async def initialize(self):
-        """Initialize connection to AtomSpace"""
-        # Mock AtomSpace initialization for integration framework
-        self.atomspace = {
-            'atoms': {},
-            'links': {},
-            'next_id': 1
-        }
-        print("AtomSpace provider initialized (mock implementation)")
-        
+        """Initialize connection to AtomSpace."""
+        # Try live server
+        result = await _http_get(f"{self._base_url}/api/v1.1/atomspaces", timeout=2.0)
+        if result is not None:
+            self._server_available = True
+            logger.info(f"AtomSpaceProvider: connected to live server at {self._base_url}")
+        else:
+            logger.info("AtomSpaceProvider: server not reachable — using in-process fallback")
+
+        # Always keep a local cache for offline operation
+        self.atomspace = {'atoms': {}, 'links': {}, 'next_id': 1}
+
     async def store_knowledge(self, knowledge: Dict[str, Any]) -> bool:
-        """Store knowledge in AtomSpace format"""
+        """Store knowledge in AtomSpace format."""
         if not self.atomspace:
             await self.initialize()
-            
-        # Convert knowledge to atom representation
+
+        # Build a human-readable name from the knowledge content
+        name = knowledge.get('type', 'Knowledge')
+        content_preview = str(knowledge.get('content', ''))[:40]
+        atom_name = f"{name}-{content_preview}" if content_preview else name
+
+        # Try persisting to live server
+        if self._server_available:
+            payload = {
+                "type": "ConceptNode",
+                "name": atom_name,
+                "truthvalue": {"type": "simple", "details": {"strength": 0.9, "count": 0.9}}
+            }
+            result = await _http_post(f"{self._base_url}/api/v1.1/atoms", payload)
+            if result:
+                logger.debug(f"Stored atom on server: {atom_name}")
+
+        # Always mirror locally
         atom_id = self.atomspace['next_id']
         self.atomspace['next_id'] += 1
-        
-        atom = {
+        self.atomspace['atoms'][atom_id] = {
             'id': atom_id,
             'type': 'ConceptNode',
-            'name': f"Knowledge-{atom_id}",
+            'name': atom_name,
             'data': knowledge,
             'created_at': str(knowledge.get('timestamp', 'unknown'))
         }
-        
-        self.atomspace['atoms'][atom_id] = atom
-        print(f"Stored knowledge as atom {atom_id}")
         return True
-        
+
     async def query_knowledge(self, query: str) -> List[Dict[str, Any]]:
-        """Query AtomSpace using pattern matching"""
-        if not self.atomspace:
-            return []
-            
+        """Query AtomSpace using pattern matching."""
         results = []
         query_lower = query.lower()
-        
-        # Simple pattern matching on stored atoms
-        for atom_id, atom in self.atomspace['atoms'].items():
-            atom_data = atom.get('data', {})
-            content = str(atom_data.get('content', '')).lower()
-            
-            if query_lower in content or query_lower in atom.get('name', '').lower():
-                results.append({
-                    'atom_id': atom_id,
-                    'type': atom['type'],
-                    'name': atom['name'],
-                    'data': atom_data,
-                    'confidence': 0.8  # Mock confidence score
-                })
-        
-        print(f"Query '{query}' returned {len(results)} results")
+
+        # Try live server first
+        if self._server_available:
+            server_result = await _http_get(
+                f"{self._base_url}/api/v1.1/atoms?name={query}&filterby=name"
+            )
+            if isinstance(server_result, dict) and "result" in server_result:
+                for atom in server_result["result"].get("atoms", []):
+                    results.append({
+                        'atom_id': atom.get("handle"),
+                        'type': atom.get("type"),
+                        'name': atom.get("name", ""),
+                        'data': {},
+                        'confidence': 0.85,
+                        'source': 'server'
+                    })
+                if results:
+                    return results
+
+        # Local fallback
+        if self.atomspace:
+            for atom_id, atom in self.atomspace['atoms'].items():
+                atom_data = atom.get('data', {})
+                content = str(atom_data.get('content', '')).lower()
+                if query_lower in content or query_lower in atom.get('name', '').lower():
+                    results.append({
+                        'atom_id': atom_id,
+                        'type': atom['type'],
+                        'name': atom['name'],
+                        'data': atom_data,
+                        'confidence': 0.8
+                    })
+
+        logger.debug(f"Query '{query}' returned {len(results)} results")
         return results
-        
+
     async def reason_about(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Apply PLN reasoning to context"""
-        # Mock reasoning implementation
-        reasoning_result = {
+        """Apply PLN reasoning to context.
+
+        When a live ElizaOS server is reachable the reasoning request is
+        forwarded; otherwise simple rule-based conclusions are returned.
+        """
+        context_type = context.get('type', 'unknown')
+
+        # Try forwarding to ElizaOS reasoning endpoint
+        if _AIOHTTP_AVAILABLE:
+            result = await _http_post(
+                f"{_ELIZAOS_BASE}/api/reasoning",
+                {"context": context},
+                timeout=3.0
+            )
+            if result:
+                return result
+
+        # Local rule-based fallback
+        reasoning_result: Dict[str, Any] = {
             'conclusions': [],
             'confidence': 0.7,
             'reasoning_steps': []
         }
-        
-        # Simple rule-based reasoning
-        context_type = context.get('type', 'unknown')
         if context_type == 'financial':
             reasoning_result['conclusions'].append(
-                "Financial context detected - applying financial reasoning patterns"
+                "Financial context detected — applying financial reasoning patterns"
             )
             reasoning_result['reasoning_steps'].append("pattern_match_financial")
         elif context_type == 'message':
             reasoning_result['conclusions'].append(
-                "Message context detected - applying conversational reasoning"
+                "Message context detected — applying conversational reasoning"
             )
             reasoning_result['reasoning_steps'].append("pattern_match_conversation")
-        
-        print(f"Applied reasoning to context type: {context_type}")
+
         return reasoning_result
 
 
 class CogServerAction:
-    """ElizaOS action for CogServer communication"""
-    
+    """ElizaOS action for CogServer communication.
+
+    Sends real HTTP requests to the CogServer REST API when available;
+    degrades gracefully if no server is running.
+    """
+
     def __init__(self, cogserver_url: str):
         self.cogserver_url = cogserver_url
-        
+        self.subscribed_events: List[str] = []
+
     async def execute(self, action_data: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute action through CogServer"""
-        # Mock CogServer communication
+        """Execute action through CogServer."""
         action_type = action_data.get('type', 'unknown')
-        
-        result = {
+
+        # Try real CogServer REST endpoint
+        server_result = await _http_post(
+            f"{self.cogserver_url}/api/execute",
+            action_data
+        )
+        if server_result:
+            logger.debug(f"CogServer executed action: {action_type}")
+            return server_result
+
+        # Fallback response
+        result: Dict[str, Any] = {
             'status': 'success',
             'action_type': action_type,
-            'cogserver_response': f"Executed {action_type} action",
+            'cogserver_response': f"Executed {action_type} action (local fallback)",
             'timestamp': str(action_data.get('timestamp', 'unknown'))
         }
-        
-        # Simulate different action types
         if action_type == 'query':
             result['result'] = {'query_results': []}
         elif action_type == 'reasoning':
-            result['result'] = {'reasoning_output': 'mock_reasoning_result'}
+            result['result'] = {'reasoning_output': 'local_fallback_result'}
         else:
             result['result'] = {'output': 'generic_action_completed'}
-            
-        print(f"CogServer executed action: {action_type}")
+
+        logger.debug(f"CogServer action '{action_type}' completed via fallback")
         return result
-        
+
     async def subscribe_to_events(self, event_types: List[str]):
-        """Subscribe to CogServer events"""
-        print(f"Subscribed to CogServer events: {event_types}")
-        # Mock event subscription - in real implementation would set up event listeners
+        """Subscribe to CogServer events."""
+        # Try real subscription via WebSocket/REST
+        if _AIOHTTP_AVAILABLE:
+            await _http_post(
+                f"{self.cogserver_url}/api/subscribe",
+                {"events": event_types}
+            )
         self.subscribed_events = event_types
+        logger.debug(f"Subscribed to CogServer events: {event_types}")
 
 
 class PLNReasoner:
@@ -179,7 +306,7 @@ class PLNReasoner:
             cross_conclusions = await self._cross_premise_reasoning(premises)
             conclusions.extend(cross_conclusions)
         
-        print(f"PLN inference processed {len(premises)} premises, generated {len(conclusions)} conclusions")
+        logger.debug(f"PLN inference: {len(premises)} premises -> {len(conclusions)} conclusions")
         return conclusions
     
     async def _infer_financial_patterns(self, premise: Dict[str, Any], confidence: float) -> List[Dict[str, Any]]:
@@ -314,7 +441,7 @@ class PLNReasoner:
         validation_factor = validation_factors.get(conclusion_type, 0.5)
         
         final_confidence = base_confidence * validation_factor
-        print(f"Validated conclusion type '{conclusion_type}' with confidence: {final_confidence}")
+        logger.debug(f"Validated conclusion type '{conclusion_type}' with confidence: {final_confidence}")
         
         return final_confidence
 
@@ -429,7 +556,7 @@ def convert_eliza_memory_to_atoms(memory_data: Dict[str, Any]) -> List[Dict[str,
                 }
                 atoms.append(eval_atom)
     
-    print(f"Converted ElizaOS memory to {len(atoms)} atoms")
+    logger.debug(f"Converted ElizaOS memory to {len(atoms)} atoms")
     return atoms
 
 def convert_atoms_to_eliza_memory(atoms: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -442,7 +569,7 @@ def convert_atoms_to_eliza_memory(atoms: List[Dict[str, Any]]) -> Dict[str, Any]
             memory_key = atom['name'].replace('Memory-', '')
             memory_data[memory_key] = atom.get('data', {})
     
-    print(f"Converted {len(atoms)} atoms to ElizaOS memory format")
+    logger.debug(f"Converted {len(atoms)} atoms to ElizaOS memory format")
     return memory_data
 
 def create_atomese_query(eliza_query: str) -> str:

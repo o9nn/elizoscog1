@@ -9,6 +9,7 @@ from typing import Dict, List, Any, Optional, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from enum import Enum
+from collections import defaultdict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -510,47 +511,160 @@ class CognitiveFinancialAnalyzer:
             factors=["multi_model_consensus", "weighted_average"]
         )
     
-    # Placeholder anomaly detection methods
     async def _statistical_anomaly_detection(self, data: List[Dict[str, Any]], sensitivity: float) -> List[Dict[str, Any]]:
-        """Statistical anomaly detection using Z-score and IQR methods"""
+        """Statistical anomaly detection using Z-score and IQR methods."""
         anomalies = []
-        
         if not data:
             return anomalies
-        
-        amounts = [t['amount'] for t in data]
-        mean_amount = np.mean(amounts)
-        std_amount = np.std(amounts)
-        
-        # Z-score based anomaly detection
-        threshold = 3.0 * sensitivity  # Adjustable threshold
-        
+
+        amounts = np.array([t['amount'] for t in data])
+        mean_amount = float(np.mean(amounts))
+        std_amount = float(np.std(amounts))
+
+        # IQR-based outlier bounds (robust to non-normal distributions)
+        q1 = float(np.percentile(amounts, 25))
+        q3 = float(np.percentile(amounts, 75))
+        iqr = q3 - q1
+        iqr_multiplier = 1.5 / sensitivity  # tighter with higher sensitivity
+        lower_bound = q1 - iqr_multiplier * iqr
+        upper_bound = q3 + iqr_multiplier * iqr
+
+        # Z-score threshold (adjustable via sensitivity)
+        z_threshold = 3.0 / sensitivity
+
         for transaction in data:
+            amount = transaction['amount']
+            flags = []
+
+            # Z-score check
             if std_amount > 0:
-                z_score = abs(transaction['amount'] - mean_amount) / std_amount
-                if z_score > threshold:
-                    anomalies.append({
-                        "transaction": transaction,
-                        "anomaly_type": "statistical_outlier",
-                        "severity": "high" if z_score > threshold * 1.5 else "medium",
-                        "z_score": z_score,
-                        "explanation": f"Amount ${transaction['amount']:.2f} is {z_score:.1f} standard deviations from mean"
-                    })
-        
+                z_score = abs(amount - mean_amount) / std_amount
+                if z_score > z_threshold:
+                    flags.append(('z_score', z_score))
+
+            # IQR check
+            if amount < lower_bound or amount > upper_bound:
+                flags.append(('iqr_outlier', amount))
+
+            if flags:
+                methods = ', '.join(f[0] for f in flags)
+                z_val = next((f[1] for f in flags if f[0] == 'z_score'), 0.0)
+                severity = "high" if len(flags) >= 2 else "medium"
+                anomalies.append({
+                    "transaction": transaction,
+                    "anomaly_type": "statistical_outlier",
+                    "severity": severity,
+                    "z_score": round(z_val, 2),
+                    "iqr_bounds": (round(lower_bound, 2), round(upper_bound, 2)),
+                    "detection_methods": methods,
+                    "explanation": (
+                        f"Amount ${amount:.2f} flagged by [{methods}]. "
+                        f"Normal range: IQR [{lower_bound:.2f}, {upper_bound:.2f}]"
+                    )
+                })
+
         return anomalies
-    
+
     async def _behavioral_anomaly_detection(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Behavioral anomaly detection"""
-        return []  # Placeholder
-    
-    async def _pattern_anomaly_detection(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Pattern-based anomaly detection"""
-        return []  # Placeholder
-    
+        """Detect behavioural anomalies: unusual category or new merchant."""
+        if len(data) < 10:
+            return []
+        anomalies = []
+        category_amounts: defaultdict = defaultdict(list)
+        for t in data:
+            category_amounts[t['category']].append(t['amount'])
+
+        for t in data:
+            cat = t['category']
+            amounts_for_cat = category_amounts[cat]
+            if len(amounts_for_cat) < 3:
+                continue
+            mean_cat = np.mean(amounts_for_cat)
+            std_cat = np.std(amounts_for_cat)
+            if std_cat > 0:
+                z = abs(t['amount'] - mean_cat) / std_cat
+                if z > 2.5:
+                    anomalies.append({
+                        "transaction": t,
+                        "anomaly_type": "category_behaviour",
+                        "severity": "medium",
+                        "z_score": round(float(z), 2),
+                        "explanation": (
+                            f"Unusual {cat} amount ${t['amount']:.2f} "
+                            f"(category mean ${mean_cat:.2f})"
+                        )
+                    })
+        return anomalies
+
     async def _temporal_anomaly_detection(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Temporal anomaly detection"""
-        return []  # Placeholder
-    
+        """Detect transactions outside normal time patterns (weekend spikes, etc.)."""
+        if len(data) < 5:
+            return []
+
+        anomalies = []
+        # Build daily totals
+        daily_totals: defaultdict = defaultdict(float)
+        for t in data:
+            raw_date = t.get('date', '')[:10]
+            daily_totals[raw_date] += t['amount']
+
+        if len(daily_totals) < 3:
+            return []
+
+        daily_values = np.array(list(daily_totals.values()))
+        mean_daily = float(np.mean(daily_values))
+        std_daily = float(np.std(daily_values))
+
+        for day, total in daily_totals.items():
+            if std_daily > 0:
+                z = abs(total - mean_daily) / std_daily
+                if z > 2.0:
+                    anomalies.append({
+                        "date": day,
+                        "anomaly_type": "daily_spending_spike",
+                        "severity": "low",
+                        "daily_total": round(total, 2),
+                        "z_score": round(float(z), 2),
+                        "explanation": (
+                            f"Daily spend of ${total:.2f} on {day} "
+                            f"is {z:.1f}σ above normal (mean ${mean_daily:.2f})"
+                        )
+                    })
+        return anomalies
+
+    async def _pattern_anomaly_detection(self, data: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Detect transactions that break established category-amount patterns."""
+        if len(data) < 15:
+            return []
+
+        anomalies = []
+        # Look for unusual category-description combinations (new merchant in known category)
+        cat_descriptions: defaultdict = defaultdict(set)
+        for t in data:
+            cat_descriptions[t['category']].add(t['description'].lower()[:30])
+
+        # Flag new descriptions in categories that have established patterns
+        seen: defaultdict = defaultdict(set)
+        for t in data:
+            cat = t['category']
+            desc = t['description'].lower()[:30]
+            known = cat_descriptions[cat]
+            if desc not in seen[cat] and len(known) >= 5:
+                seen[cat].add(desc)
+                # Only flag if the category has a well-established history
+                anomalies.append({
+                    "transaction": t,
+                    "anomaly_type": "new_pattern",
+                    "severity": "low",
+                    "explanation": (
+                        f"New transaction description in {cat} category: '{desc}'"
+                    )
+                })
+                if len(anomalies) >= 5:
+                    break  # Limit noise
+
+        return anomalies
+
     def _categorize_anomaly_severity(self, anomalies: Dict[str, List]) -> Dict[str, int]:
         """Categorize anomalies by severity"""
         severity_count = {"high": 0, "medium": 0, "low": 0}
@@ -564,20 +678,441 @@ class CognitiveFinancialAnalyzer:
     
     # Risk assessment methods (placeholders)
     async def _assess_liquidity_risk(self, data: List[Dict[str, Any]], income: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
-        """Assess liquidity risk"""
-        return {"score": 0.3, "analysis": "Liquidity analysis pending"}
+        """
+        Assess liquidity risk based on income-to-expense ratio, emergency fund adequacy,
+        and cash flow patterns.
+        
+        Returns a score between 0 (lowest risk) and 1 (highest risk).
+        """
+        if not data:
+            return {"score": 0.5, "analysis": "Insufficient data for liquidity analysis", "metrics": {}}
+        
+        # Calculate total expenses
+        total_expenses = sum(t['amount'] for t in data)
+        monthly_avg_expenses = total_expenses / max(1, len(set(
+            t['date'][:7] if isinstance(t['date'], str) else t['date'].strftime('%Y-%m') 
+            for t in data
+        )))
+        
+        # Calculate income if provided
+        total_income = 0
+        if income:
+            total_income = sum(abs(t.get('amount', 0)) for t in income)
+        else:
+            # Estimate income from transactions (deposits/positive flows)
+            # In a real scenario, we'd identify income transactions properly
+            total_income = monthly_avg_expenses * 1.2  # Conservative estimate
+        
+        monthly_income = total_income / max(1, len(set(
+            t['date'][:7] if isinstance(t.get('date', ''), str) else t.get('date', datetime.now()).strftime('%Y-%m')
+            for t in (income or data)
+        )))
+        
+        # Liquidity metrics
+        expense_to_income_ratio = monthly_avg_expenses / max(monthly_income, 1)
+        savings_rate = max(0, (monthly_income - monthly_avg_expenses) / max(monthly_income, 1))
+        emergency_fund_months = savings_rate * 12 if savings_rate > 0 else 0
+        
+        # Calculate cash flow variability (high variability = higher risk)
+        monthly_expenses = defaultdict(float)
+        for t in data:
+            month_key = t['date'][:7] if isinstance(t['date'], str) else t['date'].strftime('%Y-%m')
+            monthly_expenses[month_key] += t['amount']
+        
+        expense_values = list(monthly_expenses.values())
+        if len(expense_values) > 1:
+            expense_std = np.std(expense_values)
+            expense_mean = np.mean(expense_values)
+            cash_flow_variability = expense_std / max(expense_mean, 1)
+        else:
+            cash_flow_variability = 0.3  # Default moderate variability
+        
+        # Calculate liquidity risk score
+        # High expense-to-income ratio increases risk
+        ratio_risk = min(expense_to_income_ratio, 1.5) / 1.5  # Cap at 1.5x
+        # Low savings rate increases risk
+        savings_risk = 1 - min(savings_rate, 0.3) / 0.3  # Target 30% savings
+        # Low emergency fund increases risk
+        emergency_risk = 1 - min(emergency_fund_months, 6) / 6  # Target 6 months
+        # High variability increases risk
+        variability_risk = min(cash_flow_variability, 1)
+        
+        # Weighted liquidity risk score
+        liquidity_score = (
+            ratio_risk * 0.35 +
+            savings_risk * 0.25 +
+            emergency_risk * 0.25 +
+            variability_risk * 0.15
+        )
+        
+        # Generate analysis summary
+        concerns = []
+        if expense_to_income_ratio > 0.9:
+            concerns.append("Expense-to-income ratio is dangerously high")
+        if savings_rate < 0.1:
+            concerns.append("Savings rate below recommended minimum")
+        if emergency_fund_months < 3:
+            concerns.append("Emergency fund below 3-month threshold")
+        if cash_flow_variability > 0.5:
+            concerns.append("High cash flow variability indicates instability")
+        
+        return {
+            "score": round(liquidity_score, 3),
+            "analysis": "Liquidity risk based on income coverage, savings rate, and cash flow stability",
+            "metrics": {
+                "expense_to_income_ratio": round(expense_to_income_ratio, 3),
+                "savings_rate": round(savings_rate, 3),
+                "emergency_fund_months": round(emergency_fund_months, 1),
+                "cash_flow_variability": round(cash_flow_variability, 3),
+                "monthly_avg_expenses": round(monthly_avg_expenses, 2),
+                "monthly_income_estimate": round(monthly_income, 2)
+            },
+            "concerns": concerns,
+            "risk_level": self._categorize_risk_level(liquidity_score)
+        }
     
     async def _assess_volatility_risk(self, data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Assess spending volatility risk"""
-        return {"score": 0.4, "analysis": "Volatility analysis pending"}
+        """
+        Assess spending volatility risk based on transaction amount variance,
+        frequency patterns, and category-level volatility.
+        
+        Returns a score between 0 (stable) and 1 (highly volatile).
+        """
+        if not data or len(data) < 5:
+            return {"score": 0.5, "analysis": "Insufficient data for volatility analysis", "metrics": {}}
+        
+        amounts = [t['amount'] for t in data]
+        
+        # Calculate basic volatility metrics
+        mean_amount = np.mean(amounts)
+        std_amount = np.std(amounts)
+        cv = std_amount / max(mean_amount, 1)  # Coefficient of variation
+        
+        # Calculate interquartile range volatility
+        q1, q3 = np.percentile(amounts, [25, 75])
+        iqr = q3 - q1
+        iqr_ratio = iqr / max(mean_amount, 1)
+        
+        # Calculate day-to-day volatility
+        sorted_data = sorted(data, key=lambda x: x['date'])
+        daily_totals = defaultdict(float)
+        for t in sorted_data:
+            day_key = t['date'][:10] if isinstance(t['date'], str) else t['date'].strftime('%Y-%m-%d')
+            daily_totals[day_key] += t['amount']
+        
+        daily_values = list(daily_totals.values())
+        if len(daily_values) > 1:
+            daily_cv = np.std(daily_values) / max(np.mean(daily_values), 1)
+        else:
+            daily_cv = 0.3
+        
+        # Calculate category-level volatility
+        category_volatility = {}
+        category_data = defaultdict(list)
+        for t in data:
+            category_data[t['category']].append(t['amount'])
+        
+        cat_volatility_scores = []
+        for category, cat_amounts in category_data.items():
+            if len(cat_amounts) >= 3:
+                cat_cv = np.std(cat_amounts) / max(np.mean(cat_amounts), 1)
+                category_volatility[category] = round(cat_cv, 3)
+                cat_volatility_scores.append(cat_cv)
+        
+        avg_category_volatility = np.mean(cat_volatility_scores) if cat_volatility_scores else 0.3
+        
+        # Calculate extreme transaction frequency (outliers)
+        z_scores = np.abs((np.array(amounts) - mean_amount) / max(std_amount, 1))
+        extreme_ratio = np.sum(z_scores > 2) / len(amounts)
+        
+        # Calculate overall volatility score
+        # Normalize CV to 0-1 scale (CV > 1 is highly volatile)
+        cv_risk = min(cv, 2) / 2
+        iqr_risk = min(iqr_ratio, 2) / 2
+        daily_risk = min(daily_cv, 2) / 2
+        category_risk = min(avg_category_volatility, 1.5) / 1.5
+        extreme_risk = min(extreme_ratio * 5, 1)  # Scale up extreme transaction impact
+        
+        volatility_score = (
+            cv_risk * 0.25 +
+            iqr_risk * 0.15 +
+            daily_risk * 0.25 +
+            category_risk * 0.20 +
+            extreme_risk * 0.15
+        )
+        
+        # Generate concerns
+        concerns = []
+        if cv > 1:
+            concerns.append("High overall spending variance detected")
+        if daily_cv > 0.8:
+            concerns.append("Significant day-to-day spending fluctuations")
+        if extreme_ratio > 0.1:
+            concerns.append("Frequent extreme transactions (outliers)")
+        
+        # Find most volatile categories
+        volatile_categories = [
+            cat for cat, vol in category_volatility.items() if vol > 0.8
+        ]
+        if volatile_categories:
+            concerns.append(f"High volatility in: {', '.join(volatile_categories[:3])}")
+        
+        return {
+            "score": round(volatility_score, 3),
+            "analysis": "Spending volatility based on amount variance, daily patterns, and category stability",
+            "metrics": {
+                "coefficient_of_variation": round(cv, 3),
+                "iqr_ratio": round(iqr_ratio, 3),
+                "daily_volatility": round(daily_cv, 3),
+                "extreme_transaction_ratio": round(extreme_ratio, 3),
+                "mean_transaction_amount": round(mean_amount, 2),
+                "std_transaction_amount": round(std_amount, 2)
+            },
+            "category_volatility": category_volatility,
+            "concerns": concerns,
+            "risk_level": self._categorize_risk_level(volatility_score)
+        }
     
     async def _assess_concentration_risk(self, data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Assess category concentration risk"""
-        return {"score": 0.2, "analysis": "Concentration analysis pending"}
+        """
+        Assess category concentration risk using Herfindahl-Hirschman Index (HHI)
+        and top-category dominance metrics.
+        
+        Returns a score between 0 (well-diversified) and 1 (highly concentrated).
+        """
+        if not data:
+            return {"score": 0.5, "analysis": "Insufficient data for concentration analysis", "metrics": {}}
+        
+        # Calculate spending by category
+        category_spending = defaultdict(float)
+        for t in data:
+            category_spending[t['category']] += t['amount']
+        
+        total_spending = sum(category_spending.values())
+        if total_spending == 0:
+            return {"score": 0.5, "analysis": "No spending to analyze", "metrics": {}}
+        
+        # Calculate market share (proportion) for each category
+        category_shares = {
+            cat: amount / total_spending 
+            for cat, amount in category_spending.items()
+        }
+        
+        # Calculate Herfindahl-Hirschman Index (HHI)
+        # HHI = sum of squared market shares
+        # Range: 1/n (perfect distribution) to 1 (complete concentration)
+        hhi = sum(share ** 2 for share in category_shares.values())
+        
+        # Normalized HHI (0 to 1 scale)
+        n_categories = len(category_shares)
+        min_hhi = 1 / n_categories if n_categories > 0 else 1
+        normalized_hhi = (hhi - min_hhi) / (1 - min_hhi) if n_categories > 1 else 0
+        
+        # Top category concentration (CR1, CR3, CR5)
+        sorted_shares = sorted(category_shares.values(), reverse=True)
+        cr1 = sorted_shares[0] if len(sorted_shares) >= 1 else 0
+        cr3 = sum(sorted_shares[:3]) if len(sorted_shares) >= 3 else sum(sorted_shares)
+        cr5 = sum(sorted_shares[:5]) if len(sorted_shares) >= 5 else sum(sorted_shares)
+        
+        # Category diversity score (entropy-based)
+        entropy = -sum(
+            share * np.log2(share) if share > 0 else 0 
+            for share in category_shares.values()
+        )
+        max_entropy = np.log2(n_categories) if n_categories > 1 else 1
+        diversity_score = entropy / max_entropy if max_entropy > 0 else 0
+        
+        # Calculate concentration risk score
+        hhi_risk = normalized_hhi
+        cr1_risk = cr1  # Single category dominance
+        diversity_risk = 1 - diversity_score
+        
+        concentration_score = (
+            hhi_risk * 0.4 +
+            cr1_risk * 0.35 +
+            diversity_risk * 0.25
+        )
+        
+        # Identify dominant categories
+        dominant_categories = [
+            {"category": cat, "share": round(share, 3), "amount": round(category_spending[cat], 2)}
+            for cat, share in sorted(category_shares.items(), key=lambda x: x[1], reverse=True)[:5]
+        ]
+        
+        # Generate concerns
+        concerns = []
+        if cr1 > 0.5:
+            top_cat = max(category_shares, key=category_shares.get)
+            concerns.append(f"Over 50% spending concentrated in '{top_cat}'")
+        if normalized_hhi > 0.6:
+            concerns.append("High spending concentration (HHI indicates oligopoly-like pattern)")
+        if n_categories < 5:
+            concerns.append(f"Limited category diversity (only {n_categories} categories)")
+        if diversity_score < 0.5:
+            concerns.append("Low spending diversity - consider broader expense distribution")
+        
+        return {
+            "score": round(concentration_score, 3),
+            "analysis": "Concentration risk based on HHI, category dominance, and diversity metrics",
+            "metrics": {
+                "hhi": round(hhi, 4),
+                "normalized_hhi": round(normalized_hhi, 3),
+                "cr1_top_category": round(cr1, 3),
+                "cr3_top_three": round(cr3, 3),
+                "cr5_top_five": round(cr5, 3),
+                "diversity_score": round(diversity_score, 3),
+                "num_categories": n_categories,
+                "total_spending": round(total_spending, 2)
+            },
+            "dominant_categories": dominant_categories,
+            "concerns": concerns,
+            "risk_level": self._categorize_risk_level(concentration_score)
+        }
     
     async def _assess_behavioral_risk(self, data: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Assess behavioral spending risk"""
-        return {"score": 0.5, "analysis": "Behavioral risk analysis pending"}
+        """
+        Assess behavioral spending risk based on impulse patterns, timing anomalies,
+        weekend/late-night spending, and spending acceleration trends.
+        
+        Returns a score between 0 (disciplined) and 1 (high-risk behavior).
+        """
+        if not data or len(data) < 10:
+            return {"score": 0.5, "analysis": "Insufficient data for behavioral analysis", "metrics": {}}
+        
+        # Parse dates and extract behavioral features
+        transactions_with_dt = []
+        for t in data:
+            try:
+                if isinstance(t['date'], str):
+                    dt = datetime.fromisoformat(t['date'].replace('Z', '+00:00').split('+')[0])
+                else:
+                    dt = t['date']
+                transactions_with_dt.append({**t, 'datetime': dt})
+            except (ValueError, TypeError):
+                continue
+        
+        if len(transactions_with_dt) < 10:
+            return {"score": 0.5, "analysis": "Unable to parse sufficient transaction dates", "metrics": {}}
+        
+        # 1. Impulse spending detection (small frequent transactions)
+        amounts = [t['amount'] for t in transactions_with_dt]
+        median_amount = np.median(amounts)
+        small_threshold = median_amount * 0.3
+        small_transactions = [t for t in transactions_with_dt if t['amount'] < small_threshold]
+        small_transaction_ratio = len(small_transactions) / len(transactions_with_dt)
+        
+        # Check for clustering of small transactions (impulse bursts)
+        sorted_small = sorted(small_transactions, key=lambda x: x['datetime'])
+        impulse_bursts = 0
+        for i in range(len(sorted_small) - 2):
+            time_diff1 = (sorted_small[i+1]['datetime'] - sorted_small[i]['datetime']).total_seconds() / 3600
+            time_diff2 = (sorted_small[i+2]['datetime'] - sorted_small[i+1]['datetime']).total_seconds() / 3600
+            if time_diff1 < 24 and time_diff2 < 24:  # 3 small transactions within 24 hours
+                impulse_bursts += 1
+        
+        impulse_burst_ratio = impulse_bursts / max(len(small_transactions) - 2, 1) if small_transactions else 0
+        
+        # 2. Weekend spending pattern (potentially discretionary)
+        weekend_spending = sum(
+            t['amount'] for t in transactions_with_dt 
+            if t['datetime'].weekday() >= 5  # Saturday = 5, Sunday = 6
+        )
+        total_spending = sum(t['amount'] for t in transactions_with_dt)
+        weekend_ratio = weekend_spending / max(total_spending, 1)
+        # Expected weekend ratio is ~28.6% (2/7 days), higher indicates discretionary spending
+        weekend_excess = max(0, weekend_ratio - 0.286) / 0.714  # Normalize to 0-1
+        
+        # 3. Late-night spending (potentially impulsive)
+        if all('datetime' in t for t in transactions_with_dt):
+            late_night_transactions = [
+                t for t in transactions_with_dt 
+                if hasattr(t['datetime'], 'hour') and (t['datetime'].hour >= 22 or t['datetime'].hour < 6)
+            ]
+            late_night_ratio = len(late_night_transactions) / len(transactions_with_dt)
+            late_night_amount_ratio = sum(t['amount'] for t in late_night_transactions) / max(total_spending, 1)
+        else:
+            late_night_ratio = 0
+            late_night_amount_ratio = 0
+        
+        # 4. Spending acceleration (month-over-month growth)
+        monthly_spending = defaultdict(float)
+        for t in transactions_with_dt:
+            month_key = t['datetime'].strftime('%Y-%m')
+            monthly_spending[month_key] += t['amount']
+        
+        sorted_months = sorted(monthly_spending.keys())
+        if len(sorted_months) >= 3:
+            monthly_values = [monthly_spending[m] for m in sorted_months]
+            # Calculate average month-over-month growth rate
+            growth_rates = []
+            for i in range(1, len(monthly_values)):
+                if monthly_values[i-1] > 0:
+                    growth_rates.append((monthly_values[i] - monthly_values[i-1]) / monthly_values[i-1])
+            avg_growth_rate = np.mean(growth_rates) if growth_rates else 0
+            spending_acceleration = max(0, min(avg_growth_rate, 0.5)) / 0.5  # Cap at 50% growth
+        else:
+            spending_acceleration = 0
+        
+        # 5. Transaction frequency irregularity
+        daily_counts = defaultdict(int)
+        for t in transactions_with_dt:
+            day_key = t['datetime'].strftime('%Y-%m-%d')
+            daily_counts[day_key] += 1
+        
+        count_values = list(daily_counts.values())
+        if len(count_values) > 1:
+            frequency_cv = np.std(count_values) / max(np.mean(count_values), 1)
+        else:
+            frequency_cv = 0.3
+        
+        # Calculate behavioral risk score
+        impulse_risk = small_transaction_ratio * 0.5 + impulse_burst_ratio * 0.5
+        timing_risk = weekend_excess * 0.4 + late_night_ratio * 0.3 + late_night_amount_ratio * 0.3
+        acceleration_risk = spending_acceleration
+        irregularity_risk = min(frequency_cv, 1.5) / 1.5
+        
+        behavioral_score = (
+            impulse_risk * 0.30 +
+            timing_risk * 0.25 +
+            acceleration_risk * 0.25 +
+            irregularity_risk * 0.20
+        )
+        
+        # Generate concerns
+        concerns = []
+        if small_transaction_ratio > 0.4:
+            concerns.append("High frequency of small transactions suggests impulse spending")
+        if impulse_burst_ratio > 0.3:
+            concerns.append("Detected clusters of impulse purchases")
+        if weekend_excess > 0.3:
+            concerns.append("Weekend spending significantly exceeds weekday patterns")
+        if late_night_ratio > 0.1:
+            concerns.append("Notable late-night transaction activity")
+        if spending_acceleration > 0.5:
+            concerns.append("Spending is accelerating month-over-month")
+        if frequency_cv > 1:
+            concerns.append("Highly irregular transaction frequency patterns")
+        
+        return {
+            "score": round(behavioral_score, 3),
+            "analysis": "Behavioral risk based on impulse patterns, timing, and spending trends",
+            "metrics": {
+                "small_transaction_ratio": round(small_transaction_ratio, 3),
+                "impulse_burst_ratio": round(impulse_burst_ratio, 3),
+                "weekend_spending_ratio": round(weekend_ratio, 3),
+                "weekend_excess": round(weekend_excess, 3),
+                "late_night_transaction_ratio": round(late_night_ratio, 3),
+                "spending_acceleration": round(spending_acceleration, 3),
+                "frequency_irregularity": round(frequency_cv, 3)
+            },
+            "behavioral_patterns": {
+                "impulse_tendency": "high" if impulse_risk > 0.6 else "moderate" if impulse_risk > 0.3 else "low",
+                "timing_discipline": "poor" if timing_risk > 0.5 else "moderate" if timing_risk > 0.25 else "good",
+                "spending_trend": "accelerating" if spending_acceleration > 0.3 else "stable" if spending_acceleration < 0.1 else "growing"
+            },
+            "concerns": concerns,
+            "risk_level": self._categorize_risk_level(behavioral_score)
+        }
     
     def _categorize_risk_level(self, score: float) -> str:
         """Categorize overall risk level"""

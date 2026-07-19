@@ -16,7 +16,23 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 
-# Import Phase 1 foundation components
+# ---------------------------------------------------------------------------
+# Path layout note
+# ---------------------------------------------------------------------------
+# This repository contains TWO distinct "src" trees:
+#
+#   src/          (this file's parent-parent) — Python integration layer
+#                  for ElizaOS ↔ OpenCog ↔ GnuCash bridges.  All Python
+#                  imports resolve relative to this directory.
+#
+#   libgnucash/   — upstream GnuCash C++ library source (CMake project).
+#                   It is *not* a Python package and must NOT be added to
+#                   sys.path.
+#
+# The line below inserts the Python integration src/ root so that sibling
+# packages (core, bridges, elizaos, financial, …) resolve correctly whether
+# the caller runs from the repo root or from within src/integration/.
+# ---------------------------------------------------------------------------
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

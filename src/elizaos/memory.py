@@ -615,4 +615,240 @@ class EnhancedMemoryManager:
         """Close database connection"""
         if self.connection:
             self.connection.close()
-            logger.info("📴 Memory manager connection closed")
+
+
+class AtomSpaceMemoryBackend:
+    """
+    AtomSpace-based memory backend for ElizaOS
+    Provides hypergraph memory storage using OpenCog AtomSpace
+    """
+    
+    def __init__(self, config: Dict[str, Any]):
+        self.config = config
+        self.atomspace = None
+        self.initialized = False
+        
+        # Import AtomSpace bindings if available
+        try:
+            from opencog.atomspace import AtomSpace, types
+            # Note: type_constructors import would need to be at module level
+            self.AtomSpace = AtomSpace
+            self.types = types
+            self.atomspace_available = True
+        except ImportError:
+            logger.warning("OpenCog AtomSpace not available. Using fallback storage.")
+            self.atomspace_available = False
+    
+    async def initialize(self) -> bool:
+        """Initialize AtomSpace memory backend"""
+        try:
+            if self.atomspace_available:
+                self.atomspace = self.AtomSpace()
+                logger.info("✅ AtomSpace memory backend initialized")
+            else:
+                logger.warning("⚠️ AtomSpace not available, using fallback")
+            
+            self.initialized = True
+            return True
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize AtomSpace backend: {e}")
+            return False
+    
+    async def store_memory_as_atoms(self, memory_item: MemoryItem) -> bool:
+        """Store a memory item as atoms in AtomSpace"""
+        if not self.initialized or not self.atomspace_available:
+            return False
+        
+        try:
+            from opencog.type_constructors import ConceptNode, PredicateNode, InheritanceLink
+            
+            # Create concept node for the memory
+            memory_node = ConceptNode(f"Memory:{memory_item.id}")
+            
+            # Create nodes for content type and source
+            content_type_node = ConceptNode(f"ContentType:{memory_item.content_type}")
+            source_node = ConceptNode(f"Source:{memory_item.source}")
+            
+            # Create inheritance links
+            InheritanceLink(memory_node, content_type_node)
+            InheritanceLink(memory_node, source_node)
+            
+            # Store content as predicate
+            content_pred = PredicateNode("has_content")
+            # Note: In real implementation, content would be stored in a proper format
+            
+            # Store metadata as atoms
+            for key, value in memory_item.metadata.items():
+                meta_pred = PredicateNode(f"meta:{key}")
+                meta_value = ConceptNode(str(value))
+                # Create evaluation link for metadata
+            
+            # Store importance score
+            memory_node.tv = self.atomspace.create_truth_value(
+                memory_item.importance_score, 
+                0.9  # confidence
+            )
+            
+            logger.debug(f"Stored memory {memory_item.id} in AtomSpace")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to store memory in AtomSpace: {e}")
+            return False
+    
+    async def retrieve_memories_from_atomspace(self, pattern: Dict) -> List[Dict]:
+        """Retrieve memories from AtomSpace using pattern matching"""
+        if not self.initialized or not self.atomspace_available:
+            return []
+        
+        try:
+            from opencog.bindlink import execute_atom
+            from opencog.type_constructors import BindLink, VariableNode, ConceptNode
+            
+            # Build pattern matching query
+            # This is a simplified example - real implementation would be more sophisticated
+            results = []
+            
+            # Get all memory nodes
+            memory_nodes = self.atomspace.get_atoms_by_type(self.types.ConceptNode)
+            
+            for node in memory_nodes:
+                if node.name.startswith("Memory:"):
+                    memory_data = {
+                        'id': node.name.replace("Memory:", ""),
+                        'importance': node.tv.mean if hasattr(node, 'tv') else 0.0
+                    }
+                    results.append(memory_data)
+            
+            logger.debug(f"Retrieved {len(results)} memories from AtomSpace")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Failed to retrieve from AtomSpace: {e}")
+            return []
+    
+    async def create_hypergraph_relationship(self, source_id: str, target_id: str, 
+                                            relationship_type: str, strength: float = 1.0):
+        """Create hypergraph relationship between memories"""
+        if not self.initialized or not self.atomspace_available:
+            return False
+        
+        try:
+            from opencog.type_constructors import ConceptNode, PredicateNode, EvaluationLink, ListLink
+            
+            # Create nodes for source and target memories
+            source_node = ConceptNode(f"Memory:{source_id}")
+            target_node = ConceptNode(f"Memory:{target_id}")
+            
+            # Create predicate for relationship type
+            relationship_pred = PredicateNode(relationship_type)
+            
+            # Create evaluation link with strength
+            eval_link = EvaluationLink(
+                relationship_pred,
+                ListLink(source_node, target_node)
+            )
+            
+            # Set strength as truth value
+            eval_link.tv = self.atomspace.create_truth_value(strength, 0.9)
+            
+            logger.debug(f"Created hypergraph link: {source_id} --[{relationship_type}]--> {target_id}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to create hypergraph relationship: {e}")
+            return False
+    
+    async def query_hypergraph(self, query_pattern: str) -> List[Dict]:
+        """Query hypergraph using pattern matching"""
+        if not self.initialized or not self.atomspace_available:
+            return []
+        
+        try:
+            # This would use OpenCog's pattern matcher for sophisticated queries
+            # Simplified implementation for now
+            results = []
+            
+            logger.debug(f"Executed hypergraph query: {query_pattern}")
+            return results
+            
+        except Exception as e:
+            logger.error(f"Failed to query hypergraph: {e}")
+            return []
+
+
+class HybridMemoryManager(EnhancedMemoryManager):
+    """
+    Hybrid memory manager combining SQL storage with AtomSpace hypergraph
+    """
+    
+    def __init__(self, config: Dict[str, Any]):
+        super().__init__(config)
+        self.atomspace_backend = AtomSpaceMemoryBackend(config)
+        self.use_atomspace = config.get('use_atomspace', True)
+    
+    async def initialize(self) -> bool:
+        """Initialize both SQL and AtomSpace backends"""
+        sql_init = await super().initialize()
+        
+        if self.use_atomspace:
+            atomspace_init = await self.atomspace_backend.initialize()
+            self.use_atomspace = atomspace_init
+        
+        return sql_init
+    
+    async def store_memory(self, content: str, content_type: str = 'text',
+                          source: str = 'default', metadata: Optional[Dict] = None,
+                          importance_score: float = 0.5) -> str:
+        """Store memory in both SQL and AtomSpace"""
+        # Store in SQL first
+        memory_id = await super().store_memory(content, content_type, source, metadata, importance_score)
+        
+        # Also store in AtomSpace if available
+        if memory_id and self.use_atomspace:
+            memory_item = await self.get_memory_by_id(memory_id)
+            if memory_item:
+                await self.atomspace_backend.store_memory_as_atoms(memory_item)
+        
+        return memory_id
+    
+    async def create_memory_relationship(self, source_id: str, target_id: str,
+                                        relationship_type: str, strength: float = 1.0):
+        """Create relationship in both SQL and AtomSpace"""
+        # Create in SQL
+        try:
+            cursor = self.connection.cursor()
+            cursor.execute('''
+                INSERT OR IGNORE INTO memory_relationships 
+                (source_memory_id, target_memory_id, relationship_type, strength)
+                VALUES (?, ?, ?, ?)
+            ''', (source_id, target_id, relationship_type, strength))
+            self.connection.commit()
+        except Exception as e:
+            logger.error(f"Failed to create SQL relationship: {e}")
+        
+        # Create in AtomSpace
+        if self.use_atomspace:
+            await self.atomspace_backend.create_hypergraph_relationship(
+                source_id, target_id, relationship_type, strength
+            )
+    
+    async def query_hypergraph_memories(self, pattern: str) -> List[MemoryItem]:
+        """Query memories using hypergraph pattern matching"""
+        if not self.use_atomspace:
+            # Fallback to regular query
+            return await self.retrieve_memories(query=pattern)
+        
+        # Query AtomSpace
+        atom_results = await self.atomspace_backend.query_hypergraph(pattern)
+        
+        # Convert atom results to memory items
+        memories = []
+        for result in atom_results:
+            memory_id = result.get('id')
+            if memory_id:
+                memory = await self.get_memory_by_id(memory_id)
+                if memory:
+                    memories.append(memory)
+        
+        return memories

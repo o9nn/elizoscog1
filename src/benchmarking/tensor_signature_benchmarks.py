@@ -532,10 +532,10 @@ class TensorSignatureBenchmarkSuite:
         if not all_results:
             return summary
         
-        # Aggregate metrics
-        latencies = [r.avg_time_ms for r in all_results]
-        accuracies = [r.avg_accuracy for r in all_results]
-        memories = [r.avg_memory_mb for r in all_results]
+        # Aggregate metrics (convert to float for statistics module compatibility)
+        latencies = [float(r.avg_time_ms) for r in all_results]
+        accuracies = [float(r.avg_accuracy) for r in all_results]
+        memories = [float(r.avg_memory_mb) for r in all_results]
         
         summary['aggregate_metrics'] = {
             'avg_latency_ms': statistics.mean(latencies),
@@ -549,8 +549,8 @@ class TensorSignatureBenchmarkSuite:
         # Group by signature
         for signature_name, results in self.benchmark_results.items():
             if results:
-                signature_latencies = [r.avg_time_ms for r in results]
-                signature_accuracies = [r.avg_accuracy for r in results]
+                signature_latencies = [float(r.avg_time_ms) for r in results]
+                signature_accuracies = [float(r.avg_accuracy) for r in results]
                 
                 summary['by_signature'][signature_name] = {
                     'avg_latency_ms': statistics.mean(signature_latencies),
@@ -568,8 +568,8 @@ class TensorSignatureBenchmarkSuite:
             op_groups[op_name].append(result)
         
         for op_name, results in op_groups.items():
-            op_latencies = [r.avg_time_ms for r in results]
-            op_accuracies = [r.avg_accuracy for r in results]
+            op_latencies = [float(r.avg_time_ms) for r in results]
+            op_accuracies = [float(r.avg_accuracy) for r in results]
             
             summary['by_operation'][op_name] = {
                 'avg_latency_ms': statistics.mean(op_latencies),
@@ -587,8 +587,8 @@ class TensorSignatureBenchmarkSuite:
             arch_groups[arch_name].append(result)
         
         for arch_name, results in arch_groups.items():
-            arch_latencies = [r.avg_time_ms for r in results]
-            arch_accuracies = [r.avg_accuracy for r in results]
+            arch_latencies = [float(r.avg_time_ms) for r in results]
+            arch_accuracies = [float(r.avg_accuracy) for r in results]
             
             summary['by_architecture'][arch_name] = {
                 'avg_latency_ms': statistics.mean(arch_latencies),

@@ -47,6 +47,147 @@ This document describes the complete implementation of embodiment bindings for U
 └─────────────────────────────────────────────────────────┘
 ```
 
+## 📊 Embodiment Interface Recursion Flowcharts
+
+### Bi-directional Data Flow
+
+```mermaid
+flowchart TD
+    subgraph Physical["Physical World"]
+        ROS["🤖 ROS Robot<br/>Sensors & Actuators"]
+    end
+    
+    subgraph Virtual["Virtual World"]
+        Unity["🎮 Unity3D<br/>3D Environment"]
+    end
+    
+    subgraph Web["Web Environment"]
+        Browser["🌐 Web Browser<br/>User Interface"]
+    end
+    
+    subgraph Core["Embodiment Layer"]
+        EM["🎛️ Embodiment Manager<br/>Coordination & Fusion"]
+        SF["⚡ Sensor Fusion<br/>Multi-Modal Processing"]
+        AS["🔄 Action Sync<br/>Cross-Platform"]
+    end
+    
+    subgraph Cognitive["Cognitive Framework"]
+        AI["🧠 Master AI<br/>Reasoning & Decisions"]
+    end
+    
+    ROS -->|Sensor Data| EM
+    Unity -->|Sensor Data| EM
+    Browser -->|User Input| EM
+    
+    EM --> SF
+    SF --> AI
+    
+    AI -->|Action Commands| AS
+    AS --> EM
+    
+    EM -->|Motion Commands| ROS
+    EM -->|Action Commands| Unity
+    EM -->|Agent Response| Browser
+```
+
+### Sensor Data Processing Pipeline
+
+```mermaid
+flowchart LR
+    subgraph Input["Sensor Input"]
+        CAM["📷 Camera"]
+        LID["🔦 LiDAR"]
+        IMU["📐 IMU"]
+        GPS["📍 GPS"]
+        AUD["🎤 Audio"]
+    end
+    
+    subgraph Processing["Processing Pipeline"]
+        BUF["📦 Buffer<br/>Data Collection"]
+        PROC["⚙️ Processors<br/>Type-Specific"]
+        FUS["🔗 Fusion<br/>Multi-Modal"]
+    end
+    
+    subgraph Output["Cognitive Output"]
+        STATE["📊 Agent State<br/>Position, Orientation"]
+        ENV["🗺️ Environment<br/>Features & Context"]
+        COG["🧠 Cognitive<br/>Awareness"]
+    end
+    
+    CAM --> BUF
+    LID --> BUF
+    IMU --> BUF
+    GPS --> BUF
+    AUD --> BUF
+    
+    BUF --> PROC
+    PROC --> FUS
+    
+    FUS --> STATE
+    FUS --> ENV
+    STATE --> COG
+    ENV --> COG
+```
+
+### Action Execution Recursion
+
+```mermaid
+flowchart TD
+    START["🚀 Action Request"]
+    
+    START --> VALIDATE["✅ Validate Action"]
+    VALIDATE --> QUEUE["📋 Queue Action"]
+    QUEUE --> SYNC["🔄 Synchronize Platforms"]
+    
+    subgraph Platforms["Platform Execution"]
+        U["🎮 Unity3D"]
+        R["🤖 ROS"]
+        W["🌐 WebSocket"]
+    end
+    
+    SYNC --> U
+    SYNC --> R
+    SYNC --> W
+    
+    U --> RESULT["📊 Collect Results"]
+    R --> RESULT
+    W --> RESULT
+    
+    RESULT --> CHECK{"All Success?"}
+    CHECK -->|Yes| COMPLETE["✅ Action Complete"]
+    CHECK -->|Partial| PARTIAL["⚠️ Partial Success"]
+    CHECK -->|No| RETRY["🔁 Retry/Recovery"]
+    
+    RETRY --> SYNC
+    
+    COMPLETE --> UPDATE["📝 Update State"]
+    PARTIAL --> UPDATE
+    UPDATE --> CALLBACK["📣 Notify Cognitive"]
+    CALLBACK --> END["🏁 Done"]
+```
+
+### Cognitive State Synchronization Loop
+
+```mermaid
+sequenceDiagram
+    participant P as Platform
+    participant EM as Embodiment Manager
+    participant SF as Sensor Fusion
+    participant AI as Cognitive AI
+    
+    loop Synchronization (10Hz)
+        P->>EM: Sensor Data
+        EM->>SF: Buffer Update
+        SF->>SF: Weighted Fusion
+        SF->>EM: Fused State
+        EM->>AI: Cognitive Update
+        AI->>EM: Decision/Action
+        EM->>P: Execute Action
+        P->>EM: Action Result
+        EM->>AI: Feedback Loop
+    end
+```
+
 ## 🚀 Key Features Implemented
 
 ### ✅ Unity3D Cognitive Interface Bindings

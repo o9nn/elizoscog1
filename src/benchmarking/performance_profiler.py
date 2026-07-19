@@ -1178,9 +1178,9 @@ class AdaptivePerformanceProfiler(EnhancedPerformanceProfiler):
 
 
 # Factory function for easy instantiation
-def create_performance_profiler(history_size: int = 1000) -> EnhancedPerformanceProfiler:
+def create_performance_profiler(history_size: int = 1000, baseline_update_interval: int = 100) -> EnhancedPerformanceProfiler:
     """Create and return a configured performance profiler"""
-    return EnhancedPerformanceProfiler(history_size=history_size)
+    return EnhancedPerformanceProfiler(history_size=history_size, baseline_update_interval=baseline_update_interval)
 
 
 def create_adaptive_performance_profiler(history_size: int = 1000, 
