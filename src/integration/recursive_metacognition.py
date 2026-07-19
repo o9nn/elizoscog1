@@ -748,7 +748,7 @@ class RecursiveMetaCognitiveEngine:
         # Level 1: Meta-analysis of the observation process itself
         if depth >= 1:
             meta_observation = await self._meta_analyze_observation_process(observation)
-            observation.meta_analysis["observation_quality"] = meta_observation
+            observation.meta_analysis["meta_analysis"] = meta_observation
         
         # Level 2: Analysis of meta-analysis quality
         if depth >= 2:
