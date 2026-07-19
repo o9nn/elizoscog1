@@ -1,6 +1,6 @@
 {
   "test_summary": {
-    "total_duration": 3.6042697429656982,
+    "total_duration": 3.603855609893799,
     "successful_tests": 6,
     "total_tests": 6,
     "success_rate": 1.0,
@@ -21,11 +21,11 @@
       "success": true,
       "cycles_completed": 3,
       "fitness_improvements": [
-        0.08172639225164946,
-        -0.06820767961947316
+        0.07549859349621701,
+        -0.0455584750178446
       ],
-      "total_improvement": 0.0135187126321763,
-      "final_fitness": 0.8409632342371145
+      "total_improvement": 0.029940118478372413,
+      "final_fitness": 0.8573846400833106
     },
     "fitness_landscape": {
       "success": true,
