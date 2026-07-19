@@ -45,6 +45,86 @@ class MetricPoint:
     labels: Dict[str, str] = field(default_factory=dict)
 
 
+class LatencyHistogram:
+    """
+    HDR-style latency histogram with logarithmic buckets.
+    
+    Provides O(1) recording and constant memory regardless of sample
+    count, unlike deque-based tracking. Supports accurate percentile
+    estimation across a wide dynamic range (1 microsecond to ~1 minute).
+    """
+    
+    def __init__(self, min_value_ms: float = 0.001, max_value_ms: float = 60000.0,
+                 buckets_per_decade: int = 20):
+        self.min_value_ms = min_value_ms
+        self.max_value_ms = max_value_ms
+        self.buckets_per_decade = buckets_per_decade
+        
+        decades = np.log10(max_value_ms / min_value_ms)
+        self.num_buckets = int(np.ceil(decades * buckets_per_decade)) + 1
+        
+        # Precompute bucket boundaries (log-spaced)
+        self.boundaries = min_value_ms * np.power(
+            10.0, np.arange(self.num_buckets + 1) / buckets_per_decade)
+        
+        self.counts = np.zeros(self.num_buckets, dtype=np.int64)
+        self.total_count = 0
+        self.sum_ms = 0.0
+        self.min_seen = float('inf')
+        self.max_seen = 0.0
+    
+    def record(self, latency_ms: float) -> None:
+        """Record a latency observation in O(1)"""
+        clamped = min(max(latency_ms, self.min_value_ms), self.max_value_ms)
+        bucket = int(np.log10(clamped / self.min_value_ms) * self.buckets_per_decade)
+        bucket = min(bucket, self.num_buckets - 1)
+        
+        self.counts[bucket] += 1
+        self.total_count += 1
+        self.sum_ms += latency_ms
+        self.min_seen = min(self.min_seen, latency_ms)
+        self.max_seen = max(self.max_seen, latency_ms)
+    
+    def percentile(self, p: float) -> float:
+        """Estimate the p-th percentile (0-100) latency in ms"""
+        if self.total_count == 0:
+            return 0.0
+        
+        target = self.total_count * p / 100.0
+        cumulative = np.cumsum(self.counts)
+        bucket = int(np.searchsorted(cumulative, target))
+        bucket = min(bucket, self.num_buckets - 1)
+        
+        # Return bucket midpoint (geometric mean of boundaries)
+        return float(np.sqrt(self.boundaries[bucket] * self.boundaries[bucket + 1]))
+    
+    @property
+    def mean(self) -> float:
+        return self.sum_ms / max(self.total_count, 1)
+    
+    def get_summary(self) -> Dict[str, float]:
+        """Get histogram summary statistics"""
+        return {
+            'count': self.total_count,
+            'mean_ms': self.mean,
+            'min_ms': self.min_seen if self.total_count else 0.0,
+            'max_ms': self.max_seen,
+            'p50_ms': self.percentile(50),
+            'p90_ms': self.percentile(90),
+            'p95_ms': self.percentile(95),
+            'p99_ms': self.percentile(99),
+            'p999_ms': self.percentile(99.9),
+        }
+    
+    def reset(self) -> None:
+        """Reset all recorded data"""
+        self.counts[:] = 0
+        self.total_count = 0
+        self.sum_ms = 0.0
+        self.min_seen = float('inf')
+        self.max_seen = 0.0
+
+
 class PerformanceTracker:
     """
     Comprehensive performance tracking system.

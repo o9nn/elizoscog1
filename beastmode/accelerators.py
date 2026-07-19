@@ -26,7 +26,31 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 from src.core.ggml_symbolic_kernels import SymbolicTensor
 
+from .hardware import detect_cpu_features
+
 logger = logging.getLogger(__name__)
+
+
+def aligned_empty(shape: Tuple[int, ...], dtype: np.dtype = np.float32,
+                  alignment: int = 64) -> np.ndarray:
+    """
+    Allocate an uninitialized array with guaranteed memory alignment.
+
+    SIMD instructions (AVX2/AVX-512) perform best with 32/64-byte
+    aligned data. numpy does not guarantee alignment, so we over-allocate
+    and slice to an aligned offset.
+    """
+    dtype = np.dtype(dtype)
+    size = int(np.prod(shape))
+    nbytes = size * dtype.itemsize
+    buffer = np.empty(nbytes + alignment, dtype=np.uint8)
+    offset = (-buffer.ctypes.data) % alignment
+    return buffer[offset:offset + nbytes].view(dtype).reshape(shape)
+
+
+def is_aligned(array: np.ndarray, alignment: int = 64) -> bool:
+    """Check whether an array's data pointer is aligned"""
+    return array.ctypes.data % alignment == 0
 
 
 @dataclass
@@ -63,56 +87,48 @@ class SIMDAccelerator:
             self.config.vector_width = 4   # 128-bit
             self.config.alignment = 16
         
-        logger.info(f"SIMDAccelerator initialized: vector_width={self.config.vector_width}")
+        self.config.use_fma = self.config.use_fma and self.cpu_info.get('has_fma', False)
+        
+        logger.info(f"SIMDAccelerator initialized: vector_width={self.config.vector_width}, "
+                   f"fma={self.config.use_fma}")
     
     def _detect_cpu_capabilities(self) -> Dict[str, Any]:
-        """Detect CPU capabilities for optimization"""
-        info = {
-            'machine': platform.machine(),
+        """Detect CPU capabilities via real hardware feature detection"""
+        cpu = detect_cpu_features()
+        
+        features = []
+        if cpu.has_avx512:
+            features.append('avx512')
+        if cpu.has_avx2:
+            features.append('avx2')
+        if 'sse4_1' in cpu.features or 'sse4_2' in cpu.features or cpu.has_neon:
+            features.append('sse4')
+        
+        return {
+            'machine': cpu.machine,
             'processor': platform.processor(),
-            'features': []
+            'features': features,
+            'has_fma': cpu.has_fma,
+            'cache_line_size': cpu.cache_line_size,
+            'numa_nodes': cpu.numa_nodes,
         }
-        
-        # Check for common SIMD extensions
-        try:
-            # Use numpy to infer SIMD support
-            a = np.ones(1000, dtype=np.float32)
-            b = np.ones(1000, dtype=np.float32)
-            
-            # If operations complete quickly, SIMD is likely enabled
-            start = time.perf_counter()
-            for _ in range(100):
-                np.add(a, b)
-            elapsed = time.perf_counter() - start
-            
-            if elapsed < 0.001:
-                info['features'].append('avx2')  # Assume AVX2 for fast ops
-        except Exception:
-            pass
-        
-        return info
     
     def vectorized_add(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
         """Vectorized addition with SIMD optimization"""
-        # Ensure alignment
-        if a.ctypes.data % self.config.alignment == 0:
-            # Already aligned, use optimized path
-            return np.add(a, b, out=np.empty_like(a))
-        else:
-            # Need to realign
-            return np.add(a, b)
+        out = aligned_empty(a.shape, a.dtype, self.config.alignment)
+        return np.add(a, b, out=out)
     
     def vectorized_multiply(self, a: np.ndarray, b: np.ndarray) -> np.ndarray:
         """Vectorized multiplication with SIMD optimization"""
-        return np.multiply(a, b)
+        out = aligned_empty(a.shape, a.dtype, self.config.alignment)
+        return np.multiply(a, b, out=out)
     
     def vectorized_fma(self, a: np.ndarray, b: np.ndarray, c: np.ndarray) -> np.ndarray:
-        """Fused multiply-add: a * b + c"""
-        if self.config.use_fma:
-            # Use numpy's optimized FMA if available
-            return np.add(np.multiply(a, b), c)
-        else:
-            return a * b + c
+        """Fused multiply-add: a * b + c (single-pass, no intermediate allocation)"""
+        out = aligned_empty(a.shape, a.dtype, self.config.alignment)
+        np.multiply(a, b, out=out)
+        np.add(out, c, out=out)
+        return out
     
     def vectorized_dot(self, a: np.ndarray, b: np.ndarray) -> float:
         """Vectorized dot product"""
@@ -223,6 +239,76 @@ class MemoryOptimizer:
             'reuse_count': self.reuse_count,
             'reuse_rate': reuse_rate,
             'free_blocks': sum(len(v) for v in self.free_blocks.values())
+        }
+
+
+class ArenaAllocator:
+    """
+    Arena-style memory allocator for tensor workloads.
+    
+    Allocates one large aligned buffer up-front, then serves tensor
+    allocations as zero-copy views into it via cheap bump-pointer
+    allocation. Ideal for per-inference scratch memory: allocate
+    during the operation, then reset() the whole arena at once.
+    
+    Features:
+    - O(1) bump-pointer allocation, no per-tensor malloc
+    - SIMD-friendly alignment for every allocation
+    - Zero-copy views into the arena buffer
+    - Whole-arena reset between inference passes
+    """
+    
+    def __init__(self, capacity_mb: float = 64.0, alignment: int = 64):
+        self.capacity_bytes = int(capacity_mb * 1024 * 1024)
+        self.alignment = alignment
+        self._buffer = aligned_empty((self.capacity_bytes,), np.uint8, alignment)
+        self._offset = 0
+        
+        # Statistics
+        self.allocation_count = 0
+        self.overflow_count = 0
+        self.peak_offset = 0
+        
+        logger.info(f"ArenaAllocator initialized: capacity={capacity_mb}MB, "
+                   f"alignment={alignment}")
+    
+    def allocate(self, shape: Tuple[int, ...], dtype: np.dtype = np.float32) -> np.ndarray:
+        """
+        Allocate a tensor as a zero-copy view into the arena.
+        
+        Falls back to a regular aligned allocation when the arena is full.
+        """
+        dtype = np.dtype(dtype)
+        size_bytes = int(np.prod(shape)) * dtype.itemsize
+        
+        # Round offset up to alignment boundary
+        aligned_offset = (self._offset + self.alignment - 1) // self.alignment * self.alignment
+        
+        if aligned_offset + size_bytes > self.capacity_bytes:
+            # Arena exhausted: fall back to heap allocation
+            self.overflow_count += 1
+            return aligned_empty(shape, dtype, self.alignment)
+        
+        view = self._buffer[aligned_offset:aligned_offset + size_bytes].view(dtype).reshape(shape)
+        self._offset = aligned_offset + size_bytes
+        self.peak_offset = max(self.peak_offset, self._offset)
+        self.allocation_count += 1
+        
+        return view
+    
+    def reset(self) -> None:
+        """Reset the arena, invalidating all outstanding views"""
+        self._offset = 0
+    
+    def get_stats(self) -> Dict[str, Any]:
+        """Get arena statistics"""
+        return {
+            'capacity_mb': self.capacity_bytes / (1024 * 1024),
+            'used_mb': self._offset / (1024 * 1024),
+            'peak_mb': self.peak_offset / (1024 * 1024),
+            'utilization': self._offset / max(self.capacity_bytes, 1),
+            'allocation_count': self.allocation_count,
+            'overflow_count': self.overflow_count,
         }
 
 
@@ -342,6 +428,8 @@ class CompressionConfig:
     enable_sparse: bool = True
     sparse_threshold: float = 0.1  # Values below threshold become 0
     enable_delta: bool = False  # Delta encoding for sequential data
+    per_channel: bool = False  # Per-channel (axis 0) quantization scales
+    target_accuracy: Optional[float] = None  # Auto-select precision for accuracy
 
 
 class TensorCompressor:
@@ -440,6 +528,70 @@ class TensorCompressor:
     def _dequantize_16bit(self, data: bytes, shape: Tuple, dtype: np.dtype) -> np.ndarray:
         """Dequantize from 16-bit"""
         return np.frombuffer(data, dtype=np.float16).astype(dtype).reshape(shape)
+    
+    def quantize_per_channel(self, data: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Dynamic per-channel 8-bit quantization along axis 0.
+        
+        Each channel gets its own scale and zero-point, preserving
+        accuracy far better than a single global scale when channel
+        magnitudes differ.
+        
+        Returns (quantized_uint8, scales, min_vals).
+        """
+        channels = data.shape[0]
+        flat = data.reshape(channels, -1)
+        
+        min_vals = flat.min(axis=1)
+        max_vals = flat.max(axis=1)
+        ranges = max_vals - min_vals
+        scales = np.where(ranges > 0, ranges / 255.0, 1.0).astype(np.float32)
+        
+        quantized = ((flat - min_vals[:, None]) / scales[:, None]).round().astype(np.uint8)
+        return quantized.reshape(data.shape), scales, min_vals.astype(np.float32)
+    
+    def dequantize_per_channel(self, quantized: np.ndarray, scales: np.ndarray,
+                              min_vals: np.ndarray,
+                              dtype: np.dtype = np.float32) -> np.ndarray:
+        """Dequantize per-channel quantized data back to floating point"""
+        channels = quantized.shape[0]
+        flat = quantized.reshape(channels, -1).astype(dtype)
+        restored = flat * scales[:, None] + min_vals[:, None]
+        return restored.reshape(quantized.shape).astype(dtype)
+    
+    def select_precision(self, data: np.ndarray,
+                        target_accuracy: Optional[float] = None) -> int:
+        """
+        Automatically select quantization precision that meets the
+        target accuracy (relative reconstruction error).
+        
+        Tries INT8 first (4x compression), falls back to FP16 (2x),
+        then FP32 (lossless). Returns selected bit width (8, 16, or 32).
+        """
+        target = target_accuracy or self.config.target_accuracy or 0.99
+        data_norm = np.linalg.norm(data)
+        if data_norm == 0:
+            return 8  # Zero tensors quantize losslessly
+        
+        # Test INT8 (per-channel when enabled and possible)
+        if self.config.per_channel and data.ndim >= 2:
+            q, scales, mins = self.quantize_per_channel(data)
+            restored = self.dequantize_per_channel(q, scales, mins, data.dtype)
+        else:
+            packed = self._quantize_8bit(data)
+            restored = self._dequantize_8bit(packed, data.shape, data.dtype)
+        
+        error = np.linalg.norm(data - restored) / data_norm
+        if 1.0 - error >= target:
+            return 8
+        
+        # Test FP16
+        restored16 = data.astype(np.float16).astype(data.dtype)
+        error16 = np.linalg.norm(data - restored16) / data_norm
+        if 1.0 - error16 >= target:
+            return 16
+        
+        return 32
     
     def _sparse_encode(self, data: np.ndarray) -> Tuple[bytes, Dict[str, Any]]:
         """Sparse encoding for sparse tensors"""

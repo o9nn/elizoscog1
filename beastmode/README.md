@@ -18,12 +18,19 @@ BEASTMODE is a comprehensive tensor signature benchmarking and validation framew
 beastmode/
 ├── __init__.py              # Package exports
 ├── inference_engine.py      # High-performance tensor execution
+├── accelerators.py          # SIMD, arena/pool memory, cache, quantization
+├── kernel_fusion.py         # Fused operation pipelines
+├── bandit.py                # Thompson Sampling kernel selection
+├── hardware.py              # Runtime CPU/GPU feature detection
 ├── tensor_validator.py      # Real-data validation protocols
 ├── performance_monitor.py   # Continuous performance monitoring
 ├── adaptive_optimizer.py    # Self-tuning optimization
+├── metrics.py               # Trackers + HDR latency histogram
 ├── benchmarks.py            # Comprehensive benchmark suite
 └── tests/
-    └── test_beastmode.py    # Test suite
+    ├── test_beastmode.py        # Core test suite
+    ├── test_inference_engine.py # Engine tests
+    └── test_optimizations.py    # Optimization component tests
 ```
 
 ## Key Components
@@ -128,6 +135,95 @@ result = await optimizer.optimize_operation(
 )
 
 print(f"Improvement: {result.latency_improvement:.1%}")
+```
+
+### 5. Hardware Feature Detection
+
+Real runtime hardware detection replacing timing heuristics:
+
+```python
+from beastmode import detect_cpu_features, recommend_backend
+
+cpu = detect_cpu_features()  # Parses /proc/cpuinfo + sysfs
+print(f"SIMD width: {cpu.simd_vector_width}, AVX-512: {cpu.has_avx512}")
+print(f"NUMA nodes: {cpu.numa_nodes}, alignment: {cpu.optimal_alignment}")
+
+backend = recommend_backend()  # Fallback chain: GPU -> CPU
+print(f"Primary backend: {backend['primary']}")
+```
+
+### 6. Kernel Fusion Pipeline
+
+Fuses common operation sequences into single-pass kernels:
+
+```python
+from beastmode import create_fusion_pipeline
+
+pipeline = create_fusion_pipeline()
+result = pipeline.execute(x, [
+    ('matmul', {'other': weights}),
+    ('add', {'other': bias}),
+    ('relu', {}),
+])  # Fused into one kernel — no intermediate tensors
+
+print(pipeline.get_stats())  # fusion_rate, fusion_groups
+```
+
+### 7. Thompson Sampling Kernel Selection
+
+Contextual bandit with faster convergence than UCB:
+
+```python
+from beastmode import create_thompson_selector, LatencyRewardModel
+
+selector = create_thompson_selector(initial_exploration=0.2, half_life=500)
+rewards = LatencyRewardModel(target_latency_ms=5.0)
+
+context = ('pattern_recognition', 'medium_dense')
+arch = selector.select(context, ['cpu_x86_64', 'gpu_cuda'])
+reward = rewards.compute_reward(latency_ms=1.2, accuracy=0.99)
+selector.update(context, arch, reward)
+```
+
+### 8. Memory Optimization
+
+Aligned allocation and arena-style scratch memory:
+
+```python
+from beastmode import aligned_empty, ArenaAllocator
+
+buf = aligned_empty((1024, 1024), alignment=64)  # SIMD-friendly
+
+arena = ArenaAllocator(capacity_mb=64)  # O(1) bump-pointer allocation
+scratch = arena.allocate((256, 256))    # Zero-copy view
+arena.reset()                           # Reclaim all at once between passes
+```
+
+### 9. HDR Latency Histogram
+
+Constant-memory latency distribution tracking:
+
+```python
+from beastmode import LatencyHistogram
+
+hist = LatencyHistogram()
+hist.record(0.42)  # O(1), constant memory at any sample count
+print(hist.get_summary())  # p50/p90/p95/p99/p99.9
+```
+
+### 10. Dynamic Quantization
+
+Per-channel quantization and automatic precision selection:
+
+```python
+from beastmode import TensorCompressor
+from beastmode.accelerators import CompressionConfig
+
+compressor = TensorCompressor(CompressionConfig(per_channel=True))
+q, scales, mins = compressor.quantize_per_channel(data)   # Per-channel INT8
+restored = compressor.dequantize_per_channel(q, scales, mins)
+
+bits = compressor.select_precision(data, target_accuracy=0.99)  # 8/16/32
 ```
 
 ## Benchmarks

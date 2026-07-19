@@ -67,6 +67,46 @@ from .benchmarks import (
     generate_performance_report,
     BenchmarkConfig
 )
+from .inference_engine import (
+    BeastModeInferenceEngine,
+    KernelSelector,
+    BatchProcessor,
+    ParallelExecutor,
+    get_beastmode_engine
+)
+from .accelerators import (
+    SIMDAccelerator,
+    MemoryOptimizer,
+    ArenaAllocator,
+    CacheManager,
+    TensorCompressor,
+    aligned_empty,
+    is_aligned
+)
+from .metrics import (
+    PerformanceTracker,
+    LatencyProfiler,
+    LatencyHistogram,
+    ThroughputMonitor,
+    ResourceAnalyzer
+)
+from .hardware import (
+    CPUFeatures,
+    detect_cpu_features,
+    detect_gpu_capabilities,
+    recommend_backend
+)
+from .bandit import (
+    ThompsonSamplingSelector,
+    LatencyRewardModel,
+    DecaySchedule,
+    create_thompson_selector
+)
+from .kernel_fusion import (
+    FusionPipeline,
+    OperationGraph,
+    create_fusion_pipeline
+)
 
 __all__ = [
     # Inference Engine
@@ -75,6 +115,11 @@ __all__ = [
     'AcceleratorConfig',
     'ExecutionMode',
     'ExecutionResult',
+    'BeastModeInferenceEngine',
+    'KernelSelector',
+    'BatchProcessor',
+    'ParallelExecutor',
+    'get_beastmode_engine',
     
     # Validation
     'TensorSignatureValidator',
@@ -114,69 +159,41 @@ __all__ = [
     'run_comprehensive_benchmark',
     'run_quick_benchmark',
     'generate_performance_report',
-    'BenchmarkConfig'
-]
-
-__version__ = '1.0.0'
-__author__ = 'BEASTMODE Team'
-#!/usr/bin/env python3
-"""
-BeastMode Inference Engine
-
-Ultra-high-performance neural-symbolic inference engine with:
-- Self-optimizing kernel selection algorithms
-- Hardware-accelerated cognitive operations
-- Adaptive batch processing
-- Memory-efficient symbolic computation
-- Parallel kernel execution pipeline
-
-This module provides the most powerful accelerator for cognitive computation.
-"""
-
-from .inference_engine import (
-    BeastModeInferenceEngine,
-    KernelSelector,
-    AdaptiveOptimizer,
-    BatchProcessor,
-    ParallelExecutor,
-    get_beastmode_engine
-)
-
-from .accelerators import (
-    SIMDAccelerator,
-    MemoryOptimizer,
-    CacheManager,
-    TensorCompressor
-)
-
-from .metrics import (
-    PerformanceTracker,
-    LatencyProfiler,
-    ThroughputMonitor,
-    ResourceAnalyzer
-)
-
-__all__ = [
-    # Core Engine
-    'BeastModeInferenceEngine',
-    'KernelSelector',
-    'AdaptiveOptimizer',
-    'BatchProcessor',
-    'ParallelExecutor',
-    'get_beastmode_engine',
+    'BenchmarkConfig',
     
     # Accelerators
     'SIMDAccelerator',
     'MemoryOptimizer',
+    'ArenaAllocator',
     'CacheManager',
     'TensorCompressor',
+    'aligned_empty',
+    'is_aligned',
     
     # Metrics
     'PerformanceTracker',
     'LatencyProfiler',
+    'LatencyHistogram',
     'ThroughputMonitor',
-    'ResourceAnalyzer'
+    'ResourceAnalyzer',
+    
+    # Hardware Detection
+    'CPUFeatures',
+    'detect_cpu_features',
+    'detect_gpu_capabilities',
+    'recommend_backend',
+    
+    # Bandit Selection
+    'ThompsonSamplingSelector',
+    'LatencyRewardModel',
+    'DecaySchedule',
+    'create_thompson_selector',
+    
+    # Kernel Fusion
+    'FusionPipeline',
+    'OperationGraph',
+    'create_fusion_pipeline'
 ]
 
-__version__ = '1.0.0'
-__author__ = 'BeastMode Team'
+__version__ = '1.1.0'
+__author__ = 'BEASTMODE Team'
