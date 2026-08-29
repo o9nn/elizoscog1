@@ -45,5 +45,4 @@ roslibpy>=1.5.0
 # sensor_msgs>=4.0.0;extra=="ros2"
 
 # Unity3D communication dependencies  
-socket.io>=5.8.0
-socketio-client>=0.7.2
+python-socketio>=5.8.0
