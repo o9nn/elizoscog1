@@ -231,7 +231,7 @@ class WorkStealingScheduler:
                     for ready in graph.get_ready():
                         _try_enqueue(ready)
                     # Brief yield to avoid busy-spinning
-                    threading.Event().wait(0.0001)
+                    time.sleep(0.0001)
                     continue
 
                 # Execute the task
@@ -265,6 +265,12 @@ class WorkStealingScheduler:
 
         for t in threads:
             t.join(timeout=30.0)
+            if t.is_alive():
+                logger.warning(
+                    f"Worker thread did not finish within 30s timeout; "
+                    f"results may be incomplete "
+                    f"({len(results)}/{len(tasks)} tasks done)"
+                )
 
         return results
 
@@ -557,7 +563,7 @@ class AsyncPipeline:
 
             try:
                 # Run compute in executor to avoid blocking event loop
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 result = await loop.run_in_executor(None, self.compute_fn, data)
                 slot.result = result
                 slot.stage = PipelineStage.COMPLETE

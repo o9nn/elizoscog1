@@ -272,13 +272,13 @@ class KernelProfileCache:
         # Pre-populate default patterns if none provided
         if not self._warmup_patterns:
             cpu = detect_cpu_features()
-            arch = 'cpu_x86_64' if cpu.machine in ('x86_64', 'AMD64') else 'cpu_arm64'
             self._warmup_patterns = [
                 ('PATTERN_RECOGNITION', 'small_dense'),
                 ('PATTERN_RECOGNITION', 'medium_dense'),
                 ('TENSOR_TO_SYMBOL', 'small_dense'),
                 ('CONTEXT_BINDING', 'medium_dense'),
             ]
+            logger.debug(f"Warmup patterns registered for {cpu.machine}")
 
         self._warmed_up = True
         logger.info(
