@@ -22,6 +22,9 @@ beastmode/
 ├── kernel_fusion.py         # Fused operation pipelines
 ├── bandit.py                # Thompson Sampling kernel selection
 ├── hardware.py              # Runtime CPU/GPU feature detection
+├── parallel.py              # Work-stealing scheduler, bucketed batching, async pipeline
+├── kernel_cache.py          # Persistent kernel profiles + AOT warmup
+├── self_tuning.py           # Bayesian tuner, workload clusterer, tradeoff optimizer
 ├── tensor_validator.py      # Real-data validation protocols
 ├── performance_monitor.py   # Continuous performance monitoring
 ├── adaptive_optimizer.py    # Self-tuning optimization
@@ -30,7 +33,8 @@ beastmode/
 └── tests/
     ├── test_beastmode.py        # Core test suite
     ├── test_inference_engine.py # Engine tests
-    └── test_optimizations.py    # Optimization component tests
+    ├── test_optimizations.py    # Optimization component tests
+    └── test_parallel.py         # Parallel/cache/self-tuning tests
 ```
 
 ## Key Components
@@ -224,6 +228,86 @@ q, scales, mins = compressor.quantize_per_channel(data)   # Per-channel INT8
 restored = compressor.dequantize_per_channel(q, scales, mins)
 
 bits = compressor.select_precision(data, target_accuracy=0.99)  # 8/16/32
+```
+
+### 11. Work-Stealing Scheduler
+
+Dependency-aware parallel task execution with work stealing:
+
+```python
+from beastmode import Task, create_work_stealing_scheduler
+
+scheduler = create_work_stealing_scheduler()  # NUMA-aware worker count
+
+tasks = [
+    Task(task_id='load', fn=load_data),
+    Task(task_id='preprocess', fn=preprocess, depends_on={'load'}),
+    Task(task_id='inference', fn=run_model, depends_on={'preprocess'}),
+]
+results = scheduler.run_all(tasks)
+print(scheduler.get_stats())  # steal_count, queue_depths
+```
+
+### 12. Bucketed Dynamic Batching
+
+Groups similar-shaped tensors with latency SLA enforcement:
+
+```python
+from beastmode import create_bucketed_batcher
+
+batcher = create_bucketed_batcher(max_latency_ms=5.0)
+for tensor in incoming_tensors:
+    batcher.add(tensor)
+
+for shape, batch in batcher.get_ready_batches():
+    process_batch(batch)
+batcher.record_latency(shape, len(batch), observed_ms)
+```
+
+### 13. Async Operation Pipeline
+
+Double-buffered pipeline with callbacks for non-blocking inference:
+
+```python
+from beastmode import create_async_pipeline
+
+pipeline = create_async_pipeline(compute_fn=my_kernel)
+await pipeline.start()
+pipeline.submit(data, callback=on_result)
+await pipeline.drain()
+await pipeline.stop()
+```
+
+### 14. Kernel Profile Cache
+
+Persistent kernel performance profiles with AOT warmup:
+
+```python
+from beastmode import create_kernel_cache, classify_shape
+
+cache = create_kernel_cache()  # Auto-warms with common patterns
+cache.update('PATTERN_RECOGNITION', classify_shape((100, 100)), 'cpu_x86_64', 1.2)
+cache.save()  # Persist to disk for next session
+
+best = cache.best_architecture('PATTERN_RECOGNITION', 'medium_dense')
+```
+
+### 15. Self-Tuning System
+
+Bayesian hyperparameter optimization and workload clustering:
+
+```python
+from beastmode import create_bayesian_tuner, create_workload_clusterer
+
+# Bayesian optimization
+tuner = create_bayesian_tuner(bounds={'lr': (0.001, 1.0), 'batch': (1, 512)})
+params = tuner.suggest()
+tuner.observe(params, objective=0.95)
+
+# Workload characterization
+clusterer = create_workload_clusterer()
+info = clusterer.characterize(shape=(256, 256), latency_ms=1.2)
+print(info['cluster_label'], info['cluster_size'])
 ```
 
 ## Benchmarks
