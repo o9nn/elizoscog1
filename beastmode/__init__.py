@@ -107,6 +107,32 @@ from .kernel_fusion import (
     OperationGraph,
     create_fusion_pipeline
 )
+from .parallel import (
+    Task,
+    DependencyGraph,
+    WorkStealingScheduler,
+    BucketedBatcher,
+    BatchSLA,
+    AsyncPipeline,
+    PipelineStage,
+    create_work_stealing_scheduler,
+    create_bucketed_batcher,
+    create_async_pipeline
+)
+from .kernel_cache import (
+    KernelProfileCache,
+    SpecializedKernelProfile,
+    classify_shape,
+    create_kernel_cache
+)
+from .self_tuning import (
+    BayesianTuner,
+    WorkloadClusterer,
+    TradeoffOptimizer,
+    create_bayesian_tuner,
+    create_workload_clusterer,
+    create_tradeoff_optimizer
+)
 
 __all__ = [
     # Inference Engine
@@ -192,8 +218,34 @@ __all__ = [
     # Kernel Fusion
     'FusionPipeline',
     'OperationGraph',
-    'create_fusion_pipeline'
+    'create_fusion_pipeline',
+
+    # Parallel Execution (Phase 3)
+    'Task',
+    'DependencyGraph',
+    'WorkStealingScheduler',
+    'BucketedBatcher',
+    'BatchSLA',
+    'AsyncPipeline',
+    'PipelineStage',
+    'create_work_stealing_scheduler',
+    'create_bucketed_batcher',
+    'create_async_pipeline',
+
+    # Kernel Cache (Phase 2.2)
+    'KernelProfileCache',
+    'SpecializedKernelProfile',
+    'classify_shape',
+    'create_kernel_cache',
+
+    # Self-Tuning (Phase 5.2)
+    'BayesianTuner',
+    'WorkloadClusterer',
+    'TradeoffOptimizer',
+    'create_bayesian_tuner',
+    'create_workload_clusterer',
+    'create_tradeoff_optimizer'
 ]
 
-__version__ = '1.1.0'
+__version__ = '1.2.0'
 __author__ = 'BEASTMODE Team'
